@@ -1225,13 +1225,13 @@ WHERE p.status = 'active' AND c.consent_version = '1.0'
 ORDER BY p.id;
 ```
 
-The ZIP also contains nine private sample PNG files (191×178 to 337×226 pixels). Those files are not displayed merely because they exist on disk; a matching eligible row in the configured database must point to each one. They are too small for a sharp full-screen TV display. Use original high-resolution camera photos for the real slideshow. Do not delete database rows or private files until you have confirmed that they are only test data and backed up anything you need.
+Private upload files are not included in the submission archive. Existing local uploads remain on your own machine; do not delete them unless you have verified they are disposable and backed up anything you need.
 
 ## Selection and consent rule
 
 The slideshow reads one record at a time from `photos`, joined to `visitors` (so the visitor registration row must exist) and to `consents` on both `consent_id` and `visitor_id`. It includes only `photos.status = 'active'` and `consents.consent_version = '1.0'`. Version `1.0` is the current upload consent wording in `includes/uploads.php`, which explicitly says the uploaded photographs may be shown publicly on the slideshow screen. A future change to that wording must be reviewed deliberately: update the accepted public-consent version only after deciding whether old consent remains valid.
 
-The schema has only `active` and `hidden` photo statuses; it has no separate administrator approval/rejection state or soft-delete state. Therefore this step does not invent one. Hidden and unexpected status values are excluded; a deleted database row is naturally absent. The existing `photo.php` owner-only endpoint is unchanged. Public images are sent by the separate `slideshow_photo.php`, which rechecks the same public eligibility rule, verifies the generated storage filename, resolves the real file inside private storage, checks its actual MIME type against the database and streams it with safe headers.
+Public eligibility requires all of the following: an existing visitor row; `photos.status = 'active'`; `photos.approval_status = 'approved'`; a matching consent row for the same visitor; consent version `1.0`; and `consents.withdrawn_at IS NULL`. Pending and rejected photos are not public. Hidden photos are not public. The owner-only `photo.php` endpoint is unchanged. Public images are sent by the separate `slideshow_photo.php`, which rechecks eligibility, verifies the generated storage filename, resolves the real file inside private storage, checks its actual MIME type against the database and streams it with safe headers.
 
 ## Automatic progression and discovery
 
@@ -1330,3 +1330,18 @@ Photo review currently displays the latest 200 records; visitor listing is pagin
 For an existing Steps 1–8 database, run `database/step9_consent_withdrawal_migration.sql` once. The migration was not run against your database while preparing this archive.
 For a new database, import the updated `database/schema.sql`. The only schema addition is nullable
 `consents.withdrawn_at`, which preserves prior consent rows and records withdrawal time.
+
+
+## Step 10: final testing and submission status
+
+The current source archive was reviewed and tested with the checks listed in `TESTING_REPORT.md`.
+All PHP files pass `php -l` in PHP 8.4.24 CLI. The slideshow rendering checks and Step 9
+static security checks pass. Database-backed checks could not complete because the available
+PHP runtime does not have `pdo_mysql`; no live MySQL/MariaDB database, Windows XAMPP,
+Ubuntu web server, or browser workflow was available in this review. Therefore the application
+has **not** been fully end-to-end tested and must not be described as verified on both platforms.
+
+The submission copy deliberately excludes `.env` and every private file under
+`storage/uploads/`; it keeps `.env.example` and `storage/uploads/.gitkeep`. Copy `.env.example`
+to `.env` and configure your own database credentials and private upload directory before use.
+See `TESTING_REPORT.md` for the exact checks, outcomes, and remaining work.

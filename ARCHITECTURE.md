@@ -347,7 +347,7 @@ has an explicit consent record (the foreign key makes a photograph without one i
 ## 9. Step 7: public slideshow (implemented)
 
 * `slideshow.php` reads a cursor (`after` photo ID) and selects the next eligible photo using a prepared keyset query (`p.id > cursor`, ascending, `LIMIT 1`); if none remains, it wraps to the first eligible photo. It fetches one row at a time and never loads the photo collection into PHP memory. A count query bounds skipping of unusable file records.
-* Public eligibility requires an existing `visitors` row, `photos.status = 'active'`, a matching consent row (`c.id = p.consent_id` and `c.visitor_id = p.visitor_id`), and `c.consent_version = '1.0'`. The existing consent text version 1.0 explicitly grants public slideshow display. No administrator approval state exists in the current schema. The screen viewer is public and does not need to register; the photo contributor must already be registered/identified to upload.
+* Public eligibility requires an existing `visitors` row, `photos.status = 'active'`, a matching consent row (`c.id = p.consent_id` and `c.visitor_id = p.visitor_id`), and `c.consent_version = '1.0'`, `c.withdrawn_at IS NULL`, `p.status = 'active'`, and `p.approval_status = 'approved'`. Consent, visitor visibility status, and administrator approval are independent gates. The screen viewer is public and does not need to register; the photo contributor must already be registered/identified to upload.
 * `slideshow_photo.php` is a separate public image-serving endpoint. It rechecks public eligibility for every image request, then uses the Step 6 filename/path/MIME validation helpers before streaming from private storage. `photo.php` remains visitor-session/owner-only and is not weakened.
 * `SLIDESHOW_DEFAULT_DURATION_SECONDS` is validated by the centralized configuration loader (default 5 seconds; 2–3600). The page uses HTML meta refresh and the next ID cursor. Each full reload performs a new database lookup, which is also how new approvals are discovered. The empty state retries after 30 seconds.
 * The selected image is validated with PHP `getimagesize()`, then its original bytes are streamed from private storage. `slideshow.css` centers the image in a `100vw` × `100vh` stage and applies `max-width: 100vw`, `max-height: 100vh`, automatic dimensions and `object-fit: contain`. This adapts to the real browser viewport and avoids cropping/stretching. It does not force small sources to enlarge, so low-resolution uploads are not artificially upscaled; their own native detail still limits sharpness.
@@ -355,7 +355,7 @@ has an explicit consent record (the foreign key makes a photograph without one i
 * This is page-refresh progression, not true real-time push or uninterrupted animation. Network/server/image transfer time can extend the actual interval.
 * No schema migration was needed. The existing `photos.status` column and explicit consent version provide the available public eligibility rule. Unexpected statuses, including any manually introduced rejected/deleted-like value, do not match `active`; physical/database deletion removes the record.
 
-## 10. How returning visitors are handled (planned)
+## 10. How returning visitors are handled (implemented)
 
 1. The visitor enters their code; the application hashes it (with `visitor_code_hash()`, the same function registration uses) and looks up `visitors`. *(Built in Step 4: `identify.php`.)*
 2. If found, the visitor's earlier photographs stay in place; new uploads are added alongside them.
@@ -443,3 +443,13 @@ photo, and approved-photo checks.
 The Step 9 migration adds only `consents.withdrawn_at DATETIME NULL`. New installations use the
 updated schema; existing installations run `database/step9_consent_withdrawal_migration.sql`
 once. No other table or relationship is changed.
+
+
+## Step 10: verified implementation boundary
+
+The current PHP source is syntactically valid under PHP 8.4.24 CLI. Static slideshow
+rendering/eligibility checks and Step 9 security checks pass. The database-dependent
+application paths have not been verified in this review because `pdo_mysql` and a live
+MySQL/MariaDB service were unavailable. The current environment is not a Windows XAMPP
+or Ubuntu Apache deployment. See `TESTING_REPORT.md`; these limitations are intentional
+and must remain visible until target-environment tests are completed.

@@ -225,3 +225,13 @@ The limits and formats come from A3-A5 (10 photographs per submission, 5 MB each
   the default in-project storage depends on the included Apache deny rules.
 - Browser session cookies are Secure only when HTTPS is detected from the request or configured
   APP_URL. Plain HTTP on a local XAMPP development installation therefore does not set Secure.
+
+
+## Step 10: final verification assumptions and limits
+
+- The submission archive is a source-code/documentation package, not a database backup. It excludes `.env` and private uploaded image files; each installation must create its own `.env` from `.env.example`.
+- The current source has a slideshow-only stylesheet (`slideshow.css`) from the earlier slideshow implementation. Step 10 did not add CSS or JavaScript. JavaScript is not used by the application.
+- PHP syntax and static source checks are evidence of source-level validity only. They do not prove database behavior, browser rendering, real upload handling, session security under a live web server, or cross-platform compatibility.
+- The review environment had PHP 8.4.24 CLI and Fileinfo, but no `pdo_mysql` driver or live MySQL/MariaDB service. Windows XAMPP and Ubuntu Apache were not available for this review.
+- The CLI `php.ini` reports `upload_max_filesize=2M` and `post_max_size=8M`, which are below the application's documented multi-file upload settings. The Apache/XAMPP PHP configuration may differ and must be checked separately.
+- No real visitor data was intentionally added or changed during Step 10. No database tests were run against the user's database.

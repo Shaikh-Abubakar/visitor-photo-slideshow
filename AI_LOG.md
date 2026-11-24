@@ -661,3 +661,44 @@ flows require the user's configured MySQL/MariaDB database and have not been cla
 ### Not tested in this environment
 
 No browser-based visitor/admin login or logout flow, database ownership attack, direct URL access, real CSRF request, file upload attack, consent-withdrawal database update, or real slideshow exclusion was exercised. No Windows XAMPP or Ubuntu Apache environment was available. These remain user-side verification tasks; do not mark them as passed based on the static checks above.
+
+
+## Step 10: final testing and project documentation review (2026-11-24)
+
+| Item | Detail |
+|---|---|
+| AI tool | ChatGPT (OpenAI), GPT-6 |
+| Input | User supplied the current Visitor Photo Slideshow ZIP and the Step 10 testing/documentation requirements. |
+| Scope | Inspected the archive tree, PHP source, SQL schema and migrations, configuration, `.gitignore`, existing test scripts, README, ASSUMPTIONS, ARCHITECTURE and this log. No application feature was added. |
+| Cleanup | Removed the local `.env` from the delivery copy and removed all 10 image files from `storage/uploads/`; retained `storage/uploads/.gitkeep` and `.env.example`. No user database was accessed or changed. |
+| Documentation | Updated README and architecture descriptions to reflect the actual approval and consent-withdrawal gates. Added Step 10 verification limitations and a separate `TESTING_REPORT.md`. |
+| Test correction | The previous `tests/check_slideshow_dimensions.php` called `slideshow_fit_dimensions()`, which does not exist in the current code. The current implementation uses `getimagesize()` validation and responsive CSS (`object-fit: contain`), so the test was rewritten to check those actual implementation rules instead of a removed helper. |
+
+### Verification actually performed
+
+- PHP syntax lint: all 34 PHP files passed under PHP 8.4.24 CLI.
+- `tests/check_slideshow_rendering.php`: passed 11/11 static checks.
+- `tests/check_step9_security.php`: passed 11/11 static checks.
+- `tests/check_gallery.php`: its database-independent input/pagination checks passed; the script then stopped because no database connection could be established.
+- `tests/check_database.php`: failed to connect because `pdo_mysql` is not installed/enabled in this runtime.
+- `tests/check_identify.php`: could not run its database-dependent checks for the same reason.
+- `tests/check_upload.php`: Fileinfo and PHP-version checks passed; database-backed checks could not run. CLI `php.ini` values were observed as `upload_max_filesize=2M`, `post_max_size=8M`, `max_file_uploads=20`; the first two are below the README's recommended upload settings.
+- `tests/check_slideshow_dimensions.php`: after correction, static image-dimension and display-fit checks passed (see `TESTING_REPORT.md`).
+
+### Mistakes and corrections identified during Step 10
+
+1. **Stale slideshow test:** the supplied dimensions test expected a helper that no longer exists. This was noticed by running the test, then corrected to validate the current `getimagesize()` and CSS-based implementation.
+2. **Stale documentation:** README and ARCHITECTURE still contained pre-Step-8 wording that the slideshow had no administrator approval gate, and README described private sample images in the ZIP. The descriptions were updated to match the current code and the cleaned archive.
+3. **Sensitive/local archive contents:** the source ZIP contained a `.env` and 10 private upload images. They were removed from the delivery copy; no credential values or image contents are reproduced in this log.
+
+### Not tested / unresolved
+
+No MySQL/MariaDB database connection, schema import/migration, visitor registration or identification browser flow, upload/oversize rejection, ownership attack, admin login/actions, consent withdrawal transaction, actual slideshow timing, browser/TV rendering, Windows XAMPP, or Ubuntu Apache deployment was executed. Do not mark these as passed. These are required before claiming end-to-end readiness.
+
+### Student review
+
+- Tests I personally ran on my target installation:
+- Windows XAMPP result:
+- Ubuntu result (if available):
+- Database migration result:
+- Issues I fixed after this review:
