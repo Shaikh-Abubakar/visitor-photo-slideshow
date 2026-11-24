@@ -6,7 +6,7 @@
 
 Status of this document: written in **Step 1** (foundation and database design). Item B4 was changed in
 **Step 1, Correction 1** (consent record for every upload session). Section F was added in **Step 2**
-(configuration and database connection). Section G was added in **Step 3** (visitor registration); B2 was
+(configuration and database connection). Section G was added in **Step 3** (visitor registration); section H was added in **Step 5** (photo uploads); B2 was
 partly overridden there (see G1). Update it whenever an assumption changes.
 
 ---
@@ -136,3 +136,47 @@ None of these were stated in the Step 3 brief unless marked. They are open to ch
 | G14 | Security headers sent: `Content-Security-Policy` (`default-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'`), `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, `Cache-Control: no-store`. | The pages use no CSS, JavaScript or images, so everything can be blocked. A page that may show a code must not be cached. **If a later step adds images, the policy must be loosened for those pages.** | Yes (`send_security_headers()`) |
 | G15 | Double-submit protection relies on PHP's **default file-based sessions**, which let one request per session run at a time. | Found by testing (see `AI_LOG.md`). A custom session handler without locking would need other protection. | Yes |
 | G16 | No rate limiting: nothing stops someone from submitting the form repeatedly and creating many visitor rows. | Out of scope for Step 3; listed in section D. | Needs new code |
+
+---
+
+## H. Decisions made in Step 5 (photo uploads)
+
+The limits and formats come from A3-A5 (10 photographs per submission, 5 MB each, JPEG/JPG/PNG/WebP). Everything else below was decided by the developer.
+
+| # | Decision | Reason | Easy to change? |
+|---|----------|--------|-----------------|
+| H1 | **Limits are settings:** `UPLOAD_MAX_FILES` (10), `UPLOAD_MAX_FILE_SIZE_BYTES` (5,242,880) and, new in Step 5, `UPLOAD_ALLOWED_MIME_TYPES` (read by `config/config.php`; it can only narrow the three supported types). | The brief asks for configurable limits where practical. | Yes (`.env`) |
+| H2 | **A photograph is accepted only if its type passes four checks:** Fileinfo MIME type is allowed, the file name extension fits that type (`jpg`/`jpeg`, `png`, `webp`), `getimagesize()` confirms a real image of that type, and the size is 1 byte up to the limit. | The brief says not to trust file name or browser type. The extension check also rejects a PNG named `.jpg`; this is stricter than the brief asks. | Yes (`upload_validate_file()`) |
+| H3 | **More than the file limit rejects the whole submission.** A single invalid file rejects only that file; the valid ones are stored and the rejected ones are listed. | The brief says "more than 10 files ... rejected" but also asks for the number of successful uploads. | Yes |
+| H4 | **The accepted files of one submission are stored all together or not at all** after a technical failure (storage or database). | Avoids half-saved submissions. | Yes |
+| H5 | **One upload session = one form submission = one new `consents` row** (consent text version `1.0`, constant `UPLOAD_CONSENT_VERSION`). The row is created only when at least one photograph is stored. This settles the open point left in `AI_LOG.md` (Correction 1, decision 4). | `consents` allows many rows per visitor and version (B4). | Yes |
+| H6 | **New photographs get status `active`.** | Schema: `active` = eligible for the slideshow; consent is mandatory and recorded; no approval step (B3). If an approval step is wanted later, the initial status becomes `hidden` (one constant, `UPLOAD_INITIAL_STATUS`). **Please confirm** (question E2 is still open). | Yes |
+| H7 | **Stored name:** 48 hex characters (192 random bits) plus an extension from the detected type, inside a sub-folder named after its first two characters. | Unguessable, fits `VARCHAR(64)`, spreads files over up to 256 folders. | Yes (new files only; the database keeps the name, the folder is calculated) |
+| H8 | **The original file name is cleaned and stored as metadata** (last path part only, valid UTF-8, no control characters, at most 255 characters, `photo` when nothing remains). It is not made unique and may contain characters that are legal on one operating system only; it is never used as a path. | Display only. | Yes |
+| H9 | **The default storage folder stays `storage/uploads` inside the project** (existing setting). **Recommended: set `UPLOAD_STORAGE_PATH` to a folder outside the project.** The code does not refuse the default; it logs a warning. | Keeps the XAMPP quick start working. `.htaccess` is not a guarantee on every server (the brief says so). | Yes |
+| H10 | **Stored files are given mode 0640 and new folders 0750** (no effect on Windows). Never 0777. | Least privilege. | Yes |
+| H11 | **Uploads are not limited per visitor or per day.** A visitor can upload repeatedly and fill the disk. | Out of scope for Step 5 (section D). | Needs new code |
+| H12 | **Uploaded photographs are stored as received.** EXIF data (which can contain a GPS position) is not removed and images are not resized. | Image processing was listed as not covered (section D). | Needs new code (needs the GD extension) |
+| H13 | **The result page shows only counts and file names** (escaped). Server paths, stored names and database errors are never shown. | Brief: never expose paths or internal errors. | Yes |
+
+---
+
+## I. Decisions made in Step 6 (visitor photo gallery)
+
+**The schema limitation, stated plainly.** The database has no field that separates "this visitor may see their own photograph in their gallery" from "this photograph is approved for the public slideshow". `photos.status` has exactly two values: `active` ("eligible for the slideshow") and `hidden` ("kept but removed from the slideshow"). There is no `deleted` or `rejected` value, and no approval column. No field was invented. The safest reading was chosen instead (I1, I2): the gallery shows only what the slideshow itself would be allowed to show.
+
+| # | Decision | Reason | Easy to change? |
+|---|----------|--------|-----------------|
+| I1 | **A photograph is visible in the gallery and through `photo.php` only when all three are true:** it belongs to the identified visitor; `status = 'active'`; and a `consents` row exists with `id = photos.consent_id` and the same `visitor_id`. One shared rule (`includes/gallery.php`) is used by both the list and the image endpoint. | The brief: show only photographs with valid consent, respect the status values, never show another visitor's photograph. The composite foreign key already forces the third rule; the `INNER JOIN` checks it again so a damaged record is never shown. | Yes (one constant and the SQL in `includes/gallery.php`) |
+| I2 | **A visitor does not see their own `hidden` photographs.** `hidden` can mean "removed from the slideshow" for any reason, and the schema does not say who hid it or why. Nothing in Steps 1-5 can set it; it can only be set directly in the database (or by a later administrator step). | Showing hidden photographs could expose something an administrator removed. Not showing them is the safe direction. If the project later wants "visitors see their own hidden photographs", a separate field or status is needed. | Needs a schema decision |
+| I3 | **"Valid consent" means a consent record exists for that visitor and the photograph points at it.** `consent_version` is **not** compared with the current text version (`UPLOAD_CONSENT_VERSION`), so a photograph uploaded under version `1.0` stays visible if the wording later changes to `1.1`. | The project has no rule yet for when an old version stops being valid. Inventing one would change consent behaviour. | Yes (add a condition to the SQL) |
+| I4 | **Consent records are never changed by the gallery.** The gallery and `photo.php` only read. | The brief. | n/a |
+| I5 | **`photo.php` gives the same answer (404) for "does not exist", "belongs to another visitor", "hidden", "file missing" and "file is not the recorded image type".** A malformed number gets 400, a visitor who is not identified gets 401 (not a redirect, because the answer is an image, not a page). `gallery.php` redirects an unidentified visitor to `identify.php`, like `upload.php`. | Nobody can learn which photo numbers exist by trying them. | Yes |
+| I6 | **Page size is 20 (constant `GALLERY_PER_PAGE`).** An invalid `page` value (not a positive whole number) means page 1; a number past the end shows the last page instead of an error. Newest first (`ORDER BY p.id DESC`, which follows the index on `photos.visitor_id`; a newer upload always has a higher id). | Brief: default 20, validate on the server. `id` order avoids a sort and equals upload order. | Yes |
+| I7 | **The gallery checks that each file of the current page exists (at most 20 checks per page)** and shows "The image file is not available." instead of a broken image. | A missing file is handled safely and visibly; paths are never shown. | Yes |
+| I8 | **Photographs are sent with `Cache-Control: no-store`** (the existing security headers). The browser downloads them again on every view. | The college computers may be shared; a cached private photograph would remain after "End my session". The cost is more traffic. | Yes (`photo.php`) |
+| I9 | **No thumbnails.** The page shows each full file scaled by the HTML `width` attribute (160 pixels; no CSS). Twenty photographs of up to 5 MB each can therefore mean a large page. `loading="lazy"` (an HTML attribute) lets the browser postpone images below the screen. | Image resizing needs the GD extension and was listed as not covered (section D); the brief forbids extra libraries. | Needs new code |
+| I10 | **Existing files changed:** `includes/security.php` (`send_security_headers()` has one optional parameter, default `false`, that adds `img-src 'self'`; all other pages send exactly the headers they sent before), `upload.php` and `identify.php` (one link line each, to `gallery.php`). | The gallery needs images from this site; visitors need a way to reach it. | Yes |
+| I11 | **"End my session" on the gallery is a POST form with the CSRF token that goes to `identify.php` (`action=logout`),** the Step 4 logout. No logout code was duplicated. | A plain logout link could be triggered by another web site. | Yes |
+| I12 | **The "status" column shows `Active`** (the only listed value). | Everything else is filtered out (I1). | Yes |
+

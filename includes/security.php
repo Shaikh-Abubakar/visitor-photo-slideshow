@@ -76,14 +76,22 @@ function session_start_secure(): void
     }
 }
 
-/** Security headers for pages that show a form or personal data. Call before any output. */
-function send_security_headers(): void
+/**
+ * Security headers for pages that show a form or personal data. Call before any output.
+ *
+ * $allowOwnImages (Step 6, default false = the behaviour of Steps 3 to 5): when true, the page may
+ * load images from THIS site only (img-src 'self'). gallery.php needs it to show photographs
+ * through photo.php; every other directive stays as strict as before.
+ */
+function send_security_headers(bool $allowOwnImages = false): void
 {
     header('X-Content-Type-Options: nosniff');
     header('X-Frame-Options: DENY');
     header('Referrer-Policy: no-referrer');
-    // The pages use no CSS, no JavaScript and no images, so everything except form posting to this site can be blocked.
-    header("Content-Security-Policy: default-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'");
+    // The pages use no CSS and no JavaScript, so everything except form posting to this site
+    // (and, for the gallery only, images from this site) can be blocked.
+    $images = $allowOwnImages ? " img-src 'self';" : '';
+    header("Content-Security-Policy: default-src 'none';" . $images . " form-action 'self'; frame-ancestors 'none'; base-uri 'none'");
     // The page can show a visitor code: it must not be stored by the browser or by a shared cache.
     header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
     header('Pragma: no-cache');

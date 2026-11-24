@@ -9,34 +9,17 @@ For the corrected folder layout and complete XAMPP database setup, follow [SETUP
 A PHP and MySQL web application, built as College Assignment 1, that lets visitors upload photographs,
 record their consent, and have their photographs shown on a public slideshow.
 
-> **Current status: Step 3 of a larger project (visitor registration).**
-> The folder structure, database schema, documentation, configuration loader, database connection and
-> the **visitor registration page** (`register.php`) exist. A first-time visitor can register and receive a
-> visitor code. **Not built yet:** returning-visitor identification, consent, upload, gallery, slideshow and
-> admin screens. Those are built in later steps.
+> **Current status: Step 6 of a larger project (visitor photo gallery).**
+> The folder structure, database schema, documentation, configuration loader, database connection, visitor registration
+> (`register.php`, Step 3), returning visitor identification (`identify.php`, Step 4), the photo upload page
+> (`upload.php`, Step 5) and the **visitor gallery** (`gallery.php` with the private image endpoint `photo.php`, Step 6) exist.
+> An identified visitor can upload photographs and later see all of their own photographs, including those from earlier visits.
+> **Not built yet:** the slideshow and the admin screens.
+> **Testing:** Steps 4, 5 and 6 were run by the AI in a Linux sandbox (PHP 8.3 command line, PHP's built-in web server, MariaDB 10.11,
+> `curl`). They have **not** been run on Windows XAMPP, on Apache, in phpMyAdmin or in a real web browser: see *What was actually tested*
+> in the Step 6 section and `AI_LOG.md`.
 
-## Project description
-
-Visitors are identified by a unique **visitor code** (no phone number or email needed). A returning
-visitor can upload more photographs and keeps the earlier ones. A photograph can appear on the public
-slideshow only if the visitor's consent has been recorded. Consent is recorded again for **every upload
-session**: each session creates its own consent record, even when the consent text has not changed, and
-the photographs of that session refer to it. Administrators manage visitors, photographs and settings.
-
-## Main objectives
-
-* Let visitors upload several photographs at a time (up to 10 per request, 5 MB each, JPG/JPEG/PNG/WebP).
-* Record a consent record for every upload session, and show a photograph publicly only when its consent record exists.
-* Recognise returning visitors by code and keep their previous photographs.
-* Show an automatic slideshow (default 5 seconds per photograph).
-* Give administrators a paginated way to manage content.
-* Run from **one codebase** on Windows (XAMPP) and Ubuntu.
-* Be designed to grow (see `ARCHITECTURE.md`), without claiming unlimited scale.
-
-## Technology stack
-
-| Part | Choice |
-|------|--------|
+------|--------|
 | Language | PHP 8.2 or newer (`pdo_mysql`, `fileinfo`, `mbstring`) |
 | Database | MySQL 8+ or compatible MariaDB (InnoDB, utf8mb4) |
 | Database access | PDO with prepared statements |
@@ -50,8 +33,8 @@ the photographs of that session refer to it. Administrators manage visitors, pho
 | Foundation and database | Structure, schema, documentation | **1 (done)** |
 | Configuration and database connection | Read `.env`, connect with PDO | **2 (done)** |
 | Visitor registration and code | Create visitor, generate and hash code | **3 (done)** |
-| Consent | Record a consent record (with the consent text version) for every upload session | planned |
-| Photo upload and storage | Validate, store privately, save metadata | planned |
+| Returning visitor identification | Enter the visitor code, keep the identity in a secure session | **4 (written, not yet tested by anyone)** |
+| Consent and photo upload and storage | Consent record per upload session; validate, store privately, save metadata | **5 (written, not yet tested by anyone)** |
 | Visitor gallery | Returning visitors see their photographs (paginated) | planned |
 | Public slideshow | Show consented, active photographs | planned |
 | Administration | Login, visitor and photo management, settings | planned |
@@ -66,15 +49,25 @@ visitor-photo-slideshow/
 ├── includes/
 │   ├── bootstrap.php  common start-up file that every page loads
 │   ├── security.php   secure session, CSRF token, security headers, output escaping (Step 3)
-│   └── visitors.php   name validation, visitor-code generation and hashing, insert (Step 3)
+│   ├── visitors.php   name validation, visitor-code generation and hashing, insert (Step 3)
+│   ├── visitor_auth.php   code lookup, visitor session, logout, wrong-code throttle (Step 4)
+│   ├── uploads.php        upload validation, private storage, consent and photo records (Step 5)
+│   └── gallery.php        gallery queries, visibility rule, number validation, safe file path (Step 6)
 ├── admin/             administrator pages (empty for now)
 ├── database/
 │   └── schema.sql     database tables
 ├── storage/
 │   └── uploads/       private photograph storage (contents are never committed)
 ├── tests/
-│   └── check_database.php   command-line check of the configuration and database
+│   ├── check_database.php   command-line check of the configuration and database
+│   ├── check_identify.php   command-line check of the Step 4 lookup and throttle (changes nothing)
+│   ├── check_upload.php     command-line check of the Step 5 upload logic (changes nothing)
+│   └── check_gallery.php    command-line check of the Step 6 gallery logic (changes nothing)
 ├── register.php       visitor registration page (Step 3)
+├── identify.php       returning visitor identification page (Step 4)
+├── upload.php         photo upload page (Step 5)
+├── gallery.php        visitor photo gallery (Step 6)
+├── photo.php          private image endpoint: sends one photograph to its owner (Step 6)
 ├── .env.example       configuration template (placeholders only)
 ├── .gitignore
 ├── README.md
@@ -175,9 +168,9 @@ setting stops the application with a message that names the setting (never its v
 | `UPLOAD_STORAGE_PATH` | `storage/uploads` in the project | Absolute path of the private photograph folder |
 | `UPLOAD_MAX_FILE_SIZE_BYTES` | `5242880` (5 MB) | Largest photograph, in bytes |
 | `UPLOAD_MAX_FILES` | `10` | Most photographs per upload |
+| `UPLOAD_ALLOWED_MIME_TYPES` | `image/jpeg,image/png,image/webp` | Allowed image types, comma-separated; only these three can be named (Step 5) |
 
-Other variables in `.env.example` (`VISITOR_CODE_PEPPER`, `UPLOAD_ALLOWED_MIME_TYPES`,
-`SLIDESHOW_DEFAULT_DURATION_SECONDS`) are for later steps and are not read yet.
+Other variables in `.env.example` (`VISITOR_CODE_PEPPER`, `SLIDESHOW_DEFAULT_DURATION_SECONDS`) are for later steps and are not read yet.
 
 Rules for the `.env` file:
 
@@ -660,6 +653,502 @@ Step 3 stores a plain SHA-256 hash, as the Step 3 brief asks (see `ASSUMPTIONS.m
 
 ---
 
+## Returning visitor identification (Step 4)
+
+A visitor who registered earlier opens `identify.php`, types the visitor code received at registration and
+presses **Identify me**. If the code is right, the system finds the **existing** visitor row, remembers who the visitor
+is in a secure PHP session and shows a welcome message. **No new visitor and no new code is ever created here.**
+
+| Platform | Address of the page |
+|----------|---------------------|
+| Windows (XAMPP) | <http://localhost/visitor-photo-slideshow/identify.php> |
+| Ubuntu (virtual host from this README) | <http://localhost/identify.php> |
+
+### Files added in Step 4
+
+| File | Purpose |
+|------|---------|
+| `identify.php` | The page: form, request handling, welcome page, "End my session" button. All HTML is written by PHP; there is no CSS and no JavaScript. |
+| `includes/visitor_auth.php` | Reusable helper: `visitor_find_by_code()`, `visitor_login()`, `visitor_current()`, `visitor_is_authenticated()`, `visitor_require_login()`, `visitor_logout()` and the wrong-code throttle. |
+| `tests/check_identify.php` | Command-line check of the lookup and throttle logic. It runs inside a database transaction that is rolled back, so it leaves no visitor behind. |
+
+`register.php`, `includes/bootstrap.php`, `includes/security.php`, `includes/visitors.php`, `config/`, `database/schema.sql` and
+`tests/check_database.php` are **unchanged**. The `visitors` table already has everything needed, so there is **no schema change** and
+nothing to re-import. (Your project folder may also contain copies of `security.php` and `visitors.php` in the project root; the pages
+use only the ones in `includes/`.)
+
+### How identification works
+
+1. `GET identify.php` shows the form with a hidden **CSRF token** stored in the visitor's PHP session.
+2. On submit (`POST`) the server checks the CSRF token first. A missing or wrong token gives HTTP 403 and nothing is looked up or counted.
+3. If this session or this client address already made too many wrong attempts (see *Wrong-code protection*), the visitor is told to wait and the code is **not even looked up**.
+4. The submitted code is checked for shape (after removing hyphens and spaces and making capitals: exactly 32 characters from `A-Z` and `2-7`, the format of Step 3).
+5. PHP computes the **SHA-256 hash** with `visitor_code_hash()` from Step 3 (the same function that stored it, so letter case, hyphens and spaces do not matter) and a **prepared statement** looks for that hash in `visitors.visitor_code_hash`: `SELECT id, name FROM visitors WHERE visitor_code_hash = ? LIMIT 1`. Only the hash is sent to the database. The database never holds, and is never compared with, the code itself.
+6. **No match** (unknown code, wrong shape, missing field): the wrong attempt is counted, and the browser is redirected to `identify.php`, which shows one neutral sentence: "That visitor code was not recognised." It never says whether a name or account exists.
+7. **Match:** the session id is **replaced** (`session_regenerate_id(true)`, against session fixation), the visitor's database `id`, `name` and the time are stored in the session, the CSRF token is replaced, and the browser is redirected (HTTP 303) to `identify.php?identified=1` (**Post-Redirect-Get**).
+8. The welcome page shows the name and the visitor number from the session. **Refreshing it only repeats a `GET`**: it creates no record and asks for nothing.
+9. **End my session** (a `POST` with a CSRF token) empties the whole session and replaces the session id.
+
+The session holds only `id`, `name` and the time of identification. It never holds the visitor code or the hash. An identification
+lasts 2 hours (`VISITOR_SESSION_LIFETIME_SECONDS` in `includes/visitor_auth.php`), then the code must be entered again.
+
+### Protecting future visitor pages
+
+Every later page that is only for identified visitors starts like this (before any output):
+
+```php
+require_once __DIR__ . DIRECTORY_SEPARATOR . 'includes' . DIRECTORY_SEPARATOR . 'bootstrap.php';
+require_once __DIR__ . DIRECTORY_SEPARATOR . 'includes' . DIRECTORY_SEPARATOR . 'security.php';
+require_once __DIR__ . DIRECTORY_SEPARATOR . 'includes' . DIRECTORY_SEPARATOR . 'visitor_auth.php';
+
+send_security_headers();
+session_start_secure();
+$visitor = visitor_require_login();   // an unidentified visitor is sent to identify.php; the script stops
+// $visitor['id'] and $visitor['name'] are now safe to use
+```
+
+### Wrong-code protection (no extra database table)
+
+Two counters, each counting wrong codes inside a window of 15 minutes. Reaching either one locks identification until the window ends.
+
+| Counter | Where it lives | Limit |
+|---------|----------------|-------|
+| Per browser session | in the PHP session | 5 wrong codes |
+| Per client address | a small file in the system temp folder (`sys_get_temp_dir()`, in a folder named `vps_identify_throttle`; the file name is a hash of the address) | 30 wrong codes |
+
+The address counter still works when someone deletes the session cookie between attempts. Its limit is higher because several people
+(for example a computer lab) can share one address. Only `REMOTE_ADDR` is used, not headers such as `X-Forwarded-For`, which a visitor can forge.
+If the temp folder cannot be used, the problem is logged and only the session counter applies. A correct identification does not reset the address counter.
+
+### Run and test on Windows (XAMPP)
+
+1. Start **Apache** and **MySQL** in the XAMPP Control Panel. Make sure Steps 1 to 3 work (database imported, `.env` filled in, `register.php` registers a visitor).
+2. Copy the new files into the project: `identify.php` into the project folder, `visitor_auth.php` into its `includes` folder, `check_identify.php` into its `tests` folder. Replace `README.md` and `AI_LOG.md`.
+3. Run the command-line logic check (it changes nothing):
+
+   ```bat
+   cd C:\xampp\htdocs\visitor-photo-slideshow
+   C:\xampp\php\php.exe tests\check_identify.php
+   ```
+
+   Every line should start with `[PASS]` and the last line should be `RESULT: PASS`.
+4. Run the browser tests below. **Write your own result in the last column.**
+
+On Ubuntu the same files go into `/var/www/visitor-photo-slideshow` (repeat the permission commands of *Ubuntu installation*, step 9),
+and the check is `php tests/check_identify.php`.
+
+### Tests to run
+
+| # | Test | Expected result | Your result |
+|---|------|-----------------|-------------|
+| 1 | Open `register.php`, register `Asha Patel`. | **Registration successful** page with a visitor code. | |
+| 2 | **Copy the visitor code** (for example into Notepad). | You have the code. It exists nowhere else. | |
+| 3 | End the visitor session: open a **new private/incognito window**, or delete the cookie `vps_session` (F12 > Application/Storage > Cookies), or close the browser. | The new window does not know the earlier registration. | |
+| 4 | Open `identify.php` in that window. | The form "Returning visitor" with a code field and an **Identify me** button. | |
+| 5 | Type the code and press **Identify me**. | The address becomes `identify.php?identified=1` and the page says **Welcome back, Asha Patel!** with a visitor number. | |
+| 6 | Compare the visitor number and name with phpMyAdmin (below). | Same `id` and `name` as the row you registered. | |
+| 7 | Type a wrong code (for example `AAAA-AAAA-AAAA-AAAA-AAAA-AAAA-AAAA-AAAA`), then `abc`, then an empty field. | Each time: "That visitor code was not recognised." No welcome page. | |
+| 8 | On the welcome page press **F5** several times. | The same welcome page every time; the number of rows in `visitors` does not change. | |
+| 9 | Type your code in lower case and without hyphens (new private window). | Welcome page for the same visitor. | |
+| 10 | Check the table in phpMyAdmin (below). | `visitor_code_hash` is 64 characters; no column contains the code. | |
+| 11 | Press **End my session** on the welcome page, then open `identify.php?identified=1`. | "Your session has ended", then the form: you are no longer identified. | |
+| 12 | Send a wrong CSRF token (below). | HTTP **403**, nothing looked up. | |
+| 13 | Enter 5 wrong codes in a row in one window. | The 6th attempt shows "Too many unsuccessful attempts. Please wait ..." even with the right code. After 15 minutes, or in a **new private window**, a right code works again. (If you did the 30-attempt test too, delete the folder `vps_identify_throttle` in the PHP temp folder to unlock the address.) | |
+| 14 | Run Steps 1 to 3 again: `tests\check_database.php`, and register another visitor. | `RESULT: PASS`; registration still works as before. | |
+
+**Test 12 (any system with curl; on Windows type `curl.exe`):**
+
+```
+curl -i -X POST -d "csrf_token=wrong&action=identify&visitor_code=TEST" http://localhost/visitor-photo-slideshow/identify.php
+```
+
+(On Ubuntu use `http://localhost/identify.php`.) The first line of the answer must be `HTTP/1.1 403 Forbidden`.
+
+### Verify the visitor in phpMyAdmin
+
+1. Open <http://localhost/phpmyadmin>, click **visitor_photo_slideshow**, then **visitors** > **Browse**. Note the `id` and `name` of your visitor, and the number of rows.
+2. In the **SQL** tab run this to see the newest rows and the hash length. The code itself appears in no column:
+
+   ```sql
+   SELECT id, name, visitor_code_hash, CHAR_LENGTH(visitor_code_hash) AS hash_length, created_at
+   FROM visitors ORDER BY id DESC LIMIT 5;
+   ```
+
+3. To prove that the row found by the page is the one that owns your code (paste the code between the quotes; it works in any case, with or without hyphens):
+
+   ```sql
+   SELECT id, name FROM visitors
+   WHERE visitor_code_hash = SHA2(REPLACE(UPPER(TRIM('PASTE-YOUR-CODE-HERE')), '-', ''), 256);
+   ```
+
+   It must return the same `id` and `name` as the welcome page.
+4. After tests 5 to 11 run `SELECT COUNT(*) FROM visitors;` again: the number is the same as before you identified (identification never inserts).
+
+### Common problems (Step 4)
+
+| Problem | Usual cause and fix |
+|---------|---------------------|
+| Every submit shows "The form could not be verified" | Cookies are blocked, or the PHP session folder is not writable (same cause as for registration). |
+| A right code is always "not recognised" | The code was typed wrongly (look-alike characters: the alphabet has no `0`, `1`, `8`, `9`); or the visitor was registered on another database. Use the phpMyAdmin query above with the same code. |
+| "Too many unsuccessful attempts" although you typed few codes | The client-address counter is shared by everyone behind the same address, or an earlier test used it up. Wait 15 minutes or delete the `vps_identify_throttle` folder in the PHP temp folder. |
+| "Identification could not be completed because of a technical problem" | The database refused the query. Run `tests/check_database.php` and read the error log. |
+
+### Not built in Step 4
+
+Consent, photo upload, gallery, slideshow, administrator pages, and an automatic page for identified visitors (no protected visitor page exists yet;
+`visitor_require_login()` is ready for the next steps). `VISITOR_CODE_PEPPER` in `.env.example` is still **not used** (see `ASSUMPTIONS.md`, G1).
+A visitor who lost the code cannot recover it. The identified state is kept for 2 hours and is not re-checked against the database on every request, so a visitor row deleted
+by hand stays "identified" until the session ends.
+
+*Step 4 has not been executed by anyone: it was written without access to PHP, a web server or a database, so no result in this section has been observed. See `AI_LOG.md`.*
+
+---
+
+## Photo upload (Step 5)
+
+An **identified** visitor (Step 4) opens `upload.php`, chooses one or more photographs, ticks the **consent box** and presses **Upload photographs**.
+The photographs are checked, stored in a **private folder** under random names, and recorded in the database for that visitor together with a
+new consent record. A visitor who is not identified is sent to `identify.php` and nothing is processed.
+
+| Platform | Address of the page |
+|----------|---------------------|
+| Windows (XAMPP) | <http://localhost/visitor-photo-slideshow/upload.php> |
+| Ubuntu (virtual host from this README) | <http://localhost/upload.php> |
+
+### Files added or changed in Step 5
+
+| File | Purpose |
+|------|---------|
+| `upload.php` (new) | The page: login check, form, request handling, result. All HTML is written by PHP; no CSS, no JavaScript. |
+| `includes/uploads.php` (new) | All upload logic: validation, random names, private storage, consent and photo records, clean-up after a failure. No HTML. |
+| `tests/check_upload.php` (new) | Command-line check of the upload logic. Changes nothing (transaction rolled back, temporary folder deleted). |
+| `config/config.php` (changed) | Reads the new setting `UPLOAD_ALLOWED_MIME_TYPES` (before Step 5 it was listed but not read). Nothing else changed. |
+| `.env.example`, `README.md`, `ASSUMPTIONS.md` (H), `ARCHITECTURE.md` (sections 7 and 8), `AI_LOG.md` | Documentation. |
+
+`database/schema.sql` is **unchanged**: `photos` and `consents` already have every column and key the upload needs, so there is nothing to re-import.
+`register.php`, `identify.php`, `includes/security.php`, `includes/visitors.php` and `includes/visitor_auth.php` are unchanged.
+
+### Limits and formats (documented assumptions, all in `.env`)
+
+| Setting | Value | Note |
+|---------|-------|------|
+| Formats | JPEG/JPG, PNG, WebP | `UPLOAD_ALLOWED_MIME_TYPES` can only narrow this list |
+| Size | 5 MB per photograph (5,242,880 bytes) | `UPLOAD_MAX_FILE_SIZE_BYTES` |
+| Count | 10 per submission | `UPLOAD_MAX_FILES` |
+
+PHP has its own limits that apply **before** the application runs (`upload_max_filesize`, `post_max_size`, `max_file_uploads`; see *Required PHP upload settings*).
+If they are lower than the settings above, uploads fail with messages such as "larger than the server accepts". Restart Apache after changing `php.ini`.
+
+### How an upload works
+
+1. **Authentication.** `visitor_require_login()` (Step 4). The owner of every photograph is the visitor id in the **server-side session**; the form has no visitor field and nothing sent by the browser can change the owner.
+2. A request larger than `post_max_size` is reported as too large (HTTP 413).
+3. The **CSRF token** is checked (invalid: HTTP 403, no file is read).
+4. **Consent:** the box must be ticked in this request, every time (not ticked: HTTP 422, nothing is stored). The text says the photographs may be shown publicly on the slideshow screen.
+5. **More than 10 files:** the whole submission is rejected. Otherwise **each file** is checked: PHP upload error, really uploaded by HTTP, not empty, at most 5 MB, real content type by **PHP Fileinfo** (not the browser's type), file name ending that fits the type (`.jpg`/`.jpeg` for JPEG, `.png`, `.webp`), and `getimagesize()` confirms a real image. A file that fails is rejected and listed; the others continue.
+6. Accepted files are moved into private storage under a **random name**: 48 random hexadecimal characters plus `.jpg`, `.png` or `.webp` chosen from the detected type, in a sub-folder named after the first two characters (for example `3f/3f9c...e1.jpg`).
+7. In **one database transaction** a new row is inserted into `consents` (visitor id, consent version `1.0`, time) and then one row per file into `photos`: visitor id (from the session), consent id, random file name, **original file name (metadata only)**, detected MIME type, size, status `active`, upload time.
+8. If anything fails technically (storage or database), the transaction is rolled back **and the files stored for this submission are deleted**; the visitor sees "could not be saved because of a technical problem" and nothing else. Details go to the server error log.
+9. On success the page redirects (Post-Redirect-Get) and shows **how many photographs were uploaded**. Refreshing it uploads nothing again.
+
+**Consent.** One upload session is one form submission. Each successful submission creates its own `consents` row (even for the same visitor and the same consent version),
+and its photographs refer to it through `photos.consent_id`. The database makes a photograph without a consent of the same visitor impossible (composite foreign key).
+A photograph is not public merely because it was uploaded: nothing in the project shows photographs yet, and the later slideshow step must show only photographs that have a consent record.
+
+### Private photograph storage
+
+By default photographs go to `storage/uploads` **inside the project folder**. That folder is protected only by web-server rules (`storage/.htaccess` on XAMPP, the virtual host on Ubuntu),
+which is **not a guarantee on every server** (for example when `AllowOverride None` is set and the virtual host rules are missing). **Use a folder outside the web root** by setting
+`UPLOAD_STORAGE_PATH` in `.env` to an absolute path. The code then writes there, and no URL can reach the folder. (With the default folder the application writes a warning to the server error log.)
+The folder is created if it is missing (mode 0750) and must be writable by the web server account. Never use `chmod 777` or give *Everyone* full control.
+
+**Windows (XAMPP)**
+
+1. Create a folder **outside** `C:\xampp\htdocs`, for example `C:\vps-private\uploads`.
+2. In `.env` set `UPLOAD_STORAGE_PATH=C:\vps-private\uploads` (write the path exactly like this: no quotes needed, no escape characters).
+3. If Apache was started from the XAMPP Control Panel it runs as **your own Windows user**, which can normally already write there. If Apache runs as a Windows service, give that account **Modify** on that one folder (replace `<account>`):
+
+   ```bat
+   icacls "C:\vps-private\uploads" /grant "<account>:(OI)(CI)M"
+   ```
+
+**Ubuntu**
+
+```bash
+sudo mkdir -p /srv/vps-private/uploads
+sudo chown "$USER":www-data /srv/vps-private/uploads
+sudo chmod 2770 /srv/vps-private/uploads
+```
+
+Then set `UPLOAD_STORAGE_PATH=/srv/vps-private/uploads` in `.env`. `www-data` (the Apache account) may read and write the folder, your user can too, nobody else can, and new files inherit the group.
+`/srv/vps-private` itself needs `chmod 755` or `750` with group `www-data` so that Apache can enter it. Do not put the folder inside `/var/www/visitor-photo-slideshow`.
+Restart Apache after changing `.env` only if you set the value with `SetEnv`. If PHP's `open_basedir` is set, the folder must be on its list.
+
+### Run and test on Windows (XAMPP)
+
+1. Make sure Steps 1 to 4 work (a visitor can register and identify) and set the PHP limits from *Required PHP upload settings*; restart Apache.
+2. Copy the new files: `upload.php` into the project folder, `includes\uploads.php` into `includes`, `tests\check_upload.php` into `tests`, and replace `config\config.php`, `.env.example`, `README.md`, `ASSUMPTIONS.md`, `ARCHITECTURE.md` and `AI_LOG.md`. Keep your own `.env` (nothing has to be added to it).
+3. (Recommended) set up the private folder as shown above.
+4. Run the command-line checks (both change nothing):
+
+   ```bat
+   cd C:\xampp\htdocs\visitor-photo-slideshow
+   C:\xampp\php\php.exe tests\check_database.php
+   C:\xampp\php\php.exe tests\check_upload.php
+   ```
+
+   Every line should start with `[PASS]` (a `[WARN]` about the storage folder is information) and the last line should be `RESULT: PASS`.
+5. Run the browser tests below. **Write your own result in the last column.** Prepare: one small valid `.jpg`, one `.png`, one `.webp`, one `.gif`, one text file renamed to `fake.jpg`, a copy of a PNG renamed to `wrong.jpg`, a photograph larger than 5 MB, and 11 small images.
+
+### Tests to run in the browser
+
+| # | Test | Expected result | Your result |
+|---|------|-----------------|-------------|
+| 1 | In a **new private window** open `upload.php` without identifying. | You are sent to `identify.php`. Nothing is uploaded. | |
+| 2 | Identify (Step 4), open `upload.php`, choose **one** valid `.jpg`, tick the consent box, press **Upload photographs**. | The address becomes `upload.php?done=1` and says "1 photograph was uploaded successfully." | |
+| 3 | Choose the `.jpg`, `.png` and `.webp` together, tick consent, upload. | "3 photographs were uploaded successfully." | |
+| 4 | Check phpMyAdmin (below). | The new `photos` rows have your visitor id, original names, MIME types, sizes, status `active`, and a `consent_id` of a new `consents` row (version `1.0`) for **your** visitor. | |
+| 5 | Look at the stored names in phpMyAdmin and in the private folder. | Names are 48 random characters plus an extension, unrelated to the original names. Original names appear only in `original_filename`. | |
+| 6 | Upload the `.gif`, the `fake.jpg` and a `.txt` file. | Each is listed as not uploaded ("Only JPEG, PNG and WebP photographs are accepted"). Nothing stored. | |
+| 7 | Upload the `wrong.jpg` (a PNG named `.jpg`). | Rejected: "The file name ending does not match the type of the file." | |
+| 8 | Upload the photograph larger than 5 MB. | Rejected as too large (by the application, or by PHP if your `upload_max_filesize` is lower). | |
+| 9 | Choose 11 images and upload. | "You can upload at most 10 photographs at a time. Nothing was uploaded." (If PHP's `max_file_uploads` is below 11, PHP drops the extra files itself: raise it to 20.) | |
+| 10 | Choose a valid photo, **do not tick** the consent box, upload. | "Please tick the consent box ..." and nothing stored (no new `photos` or `consents` row). | |
+| 11 | Send a wrong CSRF token (below). | HTTP **403**, nothing stored. | |
+| 12 | Press **F5** on the success page. | The form appears again, nothing is uploaded a second time (row counts unchanged). | |
+| 13 | Identify as a **second** visitor in a private window and upload one photo. | The row has the second visitor's id; the first visitor's rows are unchanged. | |
+| 14 | Press **End my session** on `identify.php`, then open `upload.php`. | You are sent to `identify.php` again. | |
+| 15 | Failed database insertion leaves no orphaned files: run `tests\check_upload.php` (it forces failures). | The lines marked `13.` are `[PASS]`. | |
+| 16 | Steps 1 to 4 still work: `check_database.php`, register, identify. | `RESULT: PASS`; registration and identification work as before. | |
+
+**Test 11 (curl; on Windows type `curl.exe`; `photo.jpg` is any file):**
+
+```
+curl -i -X POST -F "csrf_token=wrong" -F "consent=yes" -F "photos[]=@photo.jpg" http://localhost/visitor-photo-slideshow/upload.php
+```
+
+Without a session cookie this answers with a redirect to `identify.php` (test 1 as a command). To see the 403, identify in the browser, copy the value of the
+`vps_session` cookie (F12 > Application/Storage > Cookies) and add `--cookie "vps_session=<value>"` to the command.
+
+### Verify the photo records in phpMyAdmin
+
+1. Open <http://localhost/phpmyadmin>, click **visitor_photo_slideshow**, then open the **SQL** tab and run:
+
+   ```sql
+   SELECT p.id, p.visitor_id, v.name AS visitor, p.consent_id, c.consent_version, c.consented_at,
+          p.stored_filename, p.original_filename, p.mime_type, p.file_size, p.status, p.uploaded_at
+   FROM photos p
+   JOIN visitors v ON v.id = p.visitor_id
+   JOIN consents c ON c.id = p.consent_id
+   ORDER BY p.id DESC LIMIT 20;
+   ```
+
+2. Every row must show the right visitor, a `consent_version` of `1.0`, a random `stored_filename`, the original name only in `original_filename`, and status `active`.
+3. One consent row per upload: photos uploaded in the same submission share one `consent_id`:
+
+   ```sql
+   SELECT c.id, c.visitor_id, c.consent_version, c.consented_at, COUNT(p.id) AS photos
+   FROM consents c LEFT JOIN photos p ON p.consent_id = c.id
+   GROUP BY c.id ORDER BY c.id DESC LIMIT 10;
+   ```
+
+4. Each `stored_filename` must exist as a file in the private folder, in the sub-folder named after its first two characters.
+5. A failed submission leaves **no** new `photos` or `consents` row and no new file.
+
+### Common problems (Step 5)
+
+| Problem | Usual cause and fix |
+|---------|---------------------|
+| "Uploads are not available because of a technical problem" | The storage folder cannot be created or written (check `UPLOAD_STORAGE_PATH` and permissions), or `fileinfo` / `pdo_mysql` is not enabled. Read the error log (XAMPP: `C:\xampp\apache\logs\error.log`; Ubuntu: `/var/log/apache2/error.log`). |
+| "The photographs together are larger than the server accepts" | `post_max_size` is smaller than the files together. Raise it (README, *Required PHP upload settings*) and restart Apache. |
+| Only some of many files arrive | `max_file_uploads` in `php.ini` is lower than the number of files. |
+| Every photo is "larger than the server accepts" | `upload_max_filesize` is lower than 5 MB (the PHP default is 2 MB). |
+| Every submit shows "The form could not be verified" | Cookies are blocked or the PHP session folder is not writable (same cause as for registration). |
+| `tests/check_upload.php` prints a `[WARN]` about the storage folder | The folder is inside the project. Move it outside (above). |
+| The command-line check passes but uploads fail in the browser | The command line uses a different `php.ini` than Apache. Compare `upload_max_filesize`, `post_max_size`, `max_file_uploads` in both (`phpinfo()` in a temporary page, then delete it). |
+
+### Not built in Step 5
+
+The visitor gallery, the slideshow, the administrator pages and any way to view or delete an uploaded photograph. Uploaded photographs are stored exactly as received
+(EXIF data such as a GPS position is **not** removed, and images are not resized). Uploads are not limited per visitor or per day.
+A consent cannot be withdrawn. Step 5 has not been executed by anyone: it was written without access to PHP, a web server or a database, so no result in this section has been observed. See `AI_LOG.md`.
+
+---
+
+## Visitor photo gallery (Step 6)
+
+An **identified** visitor opens `gallery.php` and sees **their own** photographs, 20 per page, newest first: the photograph, the original file name,
+the upload date and the status. Photographs from earlier visits are included, because they are found by the visitor, not by the visit.
+The images are not public files: each one is loaded through `photo.php`, which checks the owner again and then sends the file from the private folder.
+
+| Platform | Address of the page |
+|----------|---------------------|
+| Windows (XAMPP) | <http://localhost/visitor-photo-slideshow/gallery.php> |
+| Ubuntu (virtual host from this README) | <http://localhost/gallery.php> |
+
+### Files added or changed in Step 6
+
+| File | Purpose |
+|------|---------|
+| `gallery.php` (new) | The page: login check, list, pagination links, upload link, "End my session" button. All HTML is written by PHP; no CSS, no JavaScript. |
+| `photo.php` (new) | `photo.php?id=N`: sends one photograph to its owner (see below). |
+| `includes/gallery.php` (new) | The visibility rule as SQL, number and page validation, safe file-path resolution, file-type detection. No HTML. |
+| `tests/check_gallery.php` (new) | Command-line check of the gallery logic. Changes nothing (transaction rolled back, temporary folder deleted). |
+| `includes/security.php` (changed) | `send_security_headers()` got one optional parameter (default `false`) that adds `img-src 'self'`. Every other page sends exactly the headers it sent before. |
+| `upload.php`, `identify.php` (changed) | One link line each, pointing to `gallery.php`. |
+| `README.md`, `ARCHITECTURE.md`, `ASSUMPTIONS.md` (I), `AI_LOG.md` | Documentation. |
+
+`database/schema.sql` is **unchanged** (nothing to re-import), as are `register.php`, `config/*`, `includes/bootstrap.php`, `includes/visitors.php`, `includes/visitor_auth.php` and `includes/uploads.php`.
+
+### How gallery retrieval works
+
+1. `visitor_require_login()` (Step 4). An unidentified visitor is sent to `identify.php`. The visitor id comes from the **server-side session** only; `gallery.php?visitor_id=2` is ignored.
+2. One `SELECT COUNT(*)` counts the photographs this visitor may see. That gives the number of pages.
+3. The requested page (`gallery.php?page=N`) is validated: anything that is not a positive whole number means page 1, and a number past the end shows the last page.
+4. One `SELECT ... LIMIT 20 OFFSET n` reads **only that page**. Both queries are PDO prepared statements.
+5. The page writes one `<img src="photo.php?id=N">` per photograph. File paths and stored file names never appear in the page. Every output value goes through `htmlspecialchars()` (`html_escape()`).
+6. If a photograph's file is missing, the row says "The image file is not available." instead of a broken image.
+
+### Which photographs are shown (visibility and consent)
+
+A photograph is listed and served only when **all three** are true: it belongs to the identified visitor, its `status` is `active`, and a `consents` row exists for it
+(`photos.consent_id` pointing at a consent of the same visitor). `hidden` photographs are never shown. Consent records are never changed.
+
+**Limitation (no field was invented).** The schema has only the statuses `active` and `hidden`, and no field that separates "this visitor may see their own photograph"
+from "approved for the public slideshow". Uploaded does **not** mean approved, so the gallery applies the stricter slideshow rule. Consequences: a visitor cannot see their own
+`hidden` photographs, there is no `deleted` or `rejected` status to filter, and an old consent text version stays valid. See `ASSUMPTIONS.md`, section I.
+
+### How private photographs are displayed (`photo.php`)
+
+`photo.php?id=N` checks, in this order, and stops at the first failure with a short plain-text answer:
+
+| Check | Failure |
+|-------|---------|
+| Method is GET or HEAD | 405 |
+| A visitor is identified (session) | 401 (no redirect: the answer is an image) |
+| `id` is a positive whole number | 400 |
+| The photograph exists, belongs to **this** visitor, is `active` and has its consent record | 404 (the same answer as "does not exist") |
+| The stored name has the generated shape (48 hex characters + `jpg`/`png`/`webp`) and the real file lies inside the private storage folder (`realpath()`, symbolic links resolved) | 404 |
+| The real file content (PHP Fileinfo) is JPEG, PNG or WebP and equals the type in the database | 404 |
+
+Then it sends `Content-Type` (the verified type), `Content-Length`, `X-Content-Type-Options: nosniff`, `Cache-Control: no-store`, `Content-Security-Policy: default-src 'none'; sandbox`,
+`Cross-Origin-Resource-Policy: same-origin` and a generated `Content-Disposition` name (`photo-<id>.<ext>`), and then calls `readfile()`. The physical path and the stored name are never sent.
+A file is never executed: PHP only reads it and labels it as an image. There is no public URL into the private folder.
+
+### How ownership is enforced
+
+The visitor id is taken from the session in both files. The same `WHERE p.visitor_id = <session visitor> AND p.status = 'active'` (plus the consent join) decides what is listed and what may be
+downloaded, so changing the number in `photo.php?id=N` finds nothing. A photograph of another visitor, a hidden one and a number that does not exist all give the same 404.
+
+### How pagination works
+
+20 photographs per page (`GALLERY_PER_PAGE`), `LIMIT`/`OFFSET`, newest first (`ORDER BY id DESC`, which uses the index on `photos.visitor_id`). A separate `COUNT(*)` gives the total; only the rows of
+the current page are read. **Previous** and **Next** are ordinary links (`gallery.php`, `gallery.php?page=2`, ...); at the first or last page the missing direction is plain text. The page says "Page 1 of 2 (26 photographs in total)".
+
+### Run and test on Windows (XAMPP)
+
+1. Start **Apache** and **MySQL** in the XAMPP Control Panel. The project is in `C:\xampp\htdocs\visitor-photo-slideshow` and the database is imported (see the XAMPP setup above). **No re-import is needed for Step 6.**
+2. Open <http://localhost/visitor-photo-slideshow/register.php>, register a visitor and **save the code**. Open `upload.php` and upload two or three photographs (tick the consent box).
+3. Open <http://localhost/visitor-photo-slideshow/gallery.php>. You should see your photographs, their names and dates.
+4. Optional logic check (changes nothing): `C:\xampp\php\php.exe tests\check_gallery.php` from the project folder. The last line must be `RESULT: PASS`.
+
+### Tests to run in the browser
+
+| # | Test | Expected result | Your result |
+|---|------|-----------------|-------------|
+| 1 | Identify, open `gallery.php`. | The page opens and lists your photographs with image, file name, upload date and status `Active`. | |
+| 2 | Upload more photographs in a **second** upload, then open the gallery. | Photographs from both uploads are listed (newest first). | |
+| 3 | End the session, identify again (a later "visit"), open the gallery. | The earlier photographs are still listed. | |
+| 4 | Register a **second** visitor in a private window, upload one photograph, open the gallery. | Only that visitor's photograph appears; the first visitor's photographs do not. | |
+| 5 | As visitor 1, open `photo.php?id=<id of a photograph of visitor 2>` (ids: phpMyAdmin, below). | Plain text "Photograph not found." (HTTP 404). No image. | |
+| 6 | In a new private window (not identified) open `gallery.php`. | You are sent to `identify.php`. | |
+| 7 | In the same window open `photo.php?id=1`. | Plain text "Please identify yourself first." (HTTP 401). | |
+| 8 | In phpMyAdmin set one photograph to `hidden` (SQL below), reload the gallery, open its `photo.php?id=N`. | It is not listed; `photo.php` answers 404. Set it back to `active` afterwards. | |
+| 9 | Open `photo.php?id=abc`, `photo.php?id=0`, `photo.php?id=-1`, `photo.php` and `photo.php?id=999999`. | The first four: "Invalid photograph number." (400). The last: "Photograph not found." (404). | |
+| 10 | Temporarily rename one stored file in the private folder, reload the gallery, open its `photo.php?id=N`; rename it back. | The gallery row says "The image file is not available."; `photo.php` answers 404; no path is shown. | |
+| 11 | Upload 26 photographs in three uploads (10 + 10 + 6; the limit is 10 per upload), open the gallery. | Page 1 shows exactly 20; "Page 1 of 2 (26 photographs in total)". | |
+| 12 | Click **Next**, then **Previous**. | Page 2 shows the remaining 6; Previous returns to page 1. At page 2 "Next" is not a link; at page 1 "Previous" is not a link. | |
+| 13 | Try `gallery.php?page=0`, `gallery.php?page=abc`, `gallery.php?page=99`. | Page 1, page 1, last page. No error. | |
+| 14 | Register a third visitor and open the gallery before uploading. | "You have no photographs to show yet." and a link to the upload page. | |
+| 15 | Press **End my session** on the gallery page, then open `gallery.php`. | You are sent to `identify.php`. | |
+| 16 | Steps 1 to 5 still work: `check_database.php`, `check_identify.php`, `check_upload.php`, register, identify, upload. | `RESULT: PASS` in each; the pages work as before. | |
+
+### Verify gallery records in phpMyAdmin
+
+1. Open <http://localhost/phpmyadmin>, click **visitor_photo_slideshow**, open the **SQL** tab and run (replace `1` with your visitor id):
+
+   ```sql
+   -- What the gallery of visitor 1 shows: own photographs, status active, matching consent.
+   SELECT p.id, p.original_filename, p.status, p.uploaded_at, c.consent_version
+   FROM photos p
+   INNER JOIN consents c ON c.id = p.consent_id AND c.visitor_id = p.visitor_id
+   WHERE p.visitor_id = 1 AND p.status = 'active'
+   ORDER BY p.id DESC;
+
+   -- How many pages that makes (20 per page):
+   SELECT COUNT(*) AS photos, CEIL(COUNT(*) / 20) AS pages
+   FROM photos p
+   INNER JOIN consents c ON c.id = p.consent_id AND c.visitor_id = p.visitor_id
+   WHERE p.visitor_id = 1 AND p.status = 'active';
+
+   -- Photographs the gallery does NOT show (hidden), for any visitor:
+   SELECT id, visitor_id, original_filename, status FROM photos WHERE status <> 'active';
+   ```
+
+2. The first query must return exactly the rows the gallery shows, in the same order. The second gives the "Page 1 of N" numbers.
+3. To test hiding: `UPDATE photos SET status = 'hidden' WHERE id = 3;` and later `UPDATE photos SET status = 'active' WHERE id = 3;`.
+
+### Common problems (Step 6)
+
+| Problem | Usual cause and fix |
+|---------|---------------------|
+| The gallery lists photographs but the images do not show | Open `photo.php?id=N` directly: 401 means the session expired; 404 with "missing" in the error log means the file is not in the folder named by `UPLOAD_STORAGE_PATH` (if you moved the folder, the files must move too); a blank page means a PHP error (read the Apache error log). |
+| "The image file is not available." for every photograph | `UPLOAD_STORAGE_PATH` points to a different folder than the one the files were uploaded to. |
+| Gallery is empty although photographs were uploaded | They are `hidden`, or you identified as a different visitor (each visitor sees only their own). |
+| Images load slowly | Full-size files are sent (no thumbnails in this step). |
+
+### What was actually tested (by the AI, in a Linux sandbox)
+
+Environment: Ubuntu, **PHP 8.3.6 (command line and `php -S` built-in server)**, **MariaDB 10.11.14**, `curl`, with `database/schema.sql` imported unchanged. Private storage was a folder outside the project.
+The real pages were driven over HTTP with `curl` (register, identify, upload, gallery), for several visitors, with real PNG/JPEG/WebP files. Those `curl` scripts are not part of the project.
+
+| Requirement | How it was tested | Result |
+|-------------|-------------------|--------|
+| 1 Authenticated visitor opens the gallery | `curl` with the session cookie of a registered, identified visitor | Passed (HTTP 200) |
+| 2, 3 Sees photographs from earlier uploads | One visitor, two separate upload submissions (two consent records); both appear | Passed |
+| 4 Cannot see another visitor's photographs | Two visitors; each gallery contains only its own files; `?visitor_id=2` in the address is ignored | Passed |
+| 5 Changing the photo id does not expose another visitor's photograph | Visitor 1 requested visitor 2's id and the reverse; a non-existent id | Passed (404 in every case, same answer) |
+| 6 Unauthenticated gallery | No cookie | Passed (303 redirect to `identify.php`) |
+| 7 Unauthenticated `photo.php` | No cookie | Passed (401) |
+| 8 Hidden / restricted photographs | `status` set to `hidden` directly in the database; consent id changed to a missing one and to another visitor's consent (with foreign-key checks switched off for that test only, to simulate a damaged record); then restored | Passed (not listed, `photo.php` 404) |
+| 9 Invalid photo ids | `abc`, `0`, `-1`, `1.5`, `01`, empty, 20 digits, `id[]=1`, `1 OR 1=1`, `1;DROP`, no parameter, a trailing line break | Passed (400) |
+| 10 Missing physical file | File renamed away and back | Passed (gallery says "not available", `photo.php` 404, no path shown) |
+| Extra: file whose content is PHP code but is named `.png` | Content replaced and restored | Passed (404, nothing executed) |
+| Extra: stored name `../../../../etc/passwd` placed in the database | Row changed and restored | Passed (404, nothing leaked) |
+| 11 No more than 20 per page | A visitor with 26 photographs | Passed (20 on page 1, 6 on page 2) |
+| 12 Previous / Next | Link targets and plain-text ends checked on both pages; `page=abc`, `0`, `-4`, `1.5`, `page[]=2`, 20 digits, `99` | Passed |
+| 13 Empty gallery | New visitor | Passed (message and upload link) |
+| 14 Steps 1 to 5 still work | `tests/check_database.php`, `check_identify.php` (22 checks), `check_upload.php` (42 checks), and the live register / identify / upload flow | Passed |
+| Extra: output escaping | A file named `a"><img src=x onerror=alert(1)>.png` | Passed (shown as text) |
+| Extra: logout | POST with the CSRF token ends the session; a wrong token gives 403; afterwards gallery 303 and `photo.php` 401 | Passed |
+| Extra: response headers | `Content-Type` (png, jpeg, webp), `nosniff`, `no-store`, fixed file name, no path in any header; HEAD gives no body; POST gives 405; the served bytes are identical to the uploaded file | Passed |
+| `tests/check_gallery.php` | Run against the sandbox database | `RESULT: PASS - 64 passed, 0 failed` |
+
+**Found and fixed during testing:** the first version of the number check used `$` in its regular expression, which in PHP also matches before a final line break, so `"1"` followed by a line break was accepted
+(harmless, it became 1, but wrong). It now uses `\z`. Two of my own test lines also failed at first because the test, not the application, was wrong (a pattern that matched the CSRF token, and a hostile file name that
+the Step 5 cleaning had already shortened); they were corrected and re-run.
+
+**Not tested:** Windows, XAMPP, Apache, `.htaccess` rules, phpMyAdmin, Ubuntu with Apache (the sandbox used PHP's built-in server), and any real web browser. In particular `curl` does not enforce the
+`Content-Security-Policy`, so **that a browser actually displays the thumbnails under `img-src 'self'` has not been observed**; the header text was checked, not the browser behaviour. Symbolic links were tested on Linux only
+(the command-line check skips that test when links cannot be created). The browser table above is for you to fill in.
+
+### Not built in Step 6
+
+The slideshow, the administrator pages, deleting or hiding a photograph from the gallery, downloading originals under their own names, thumbnails and any change of a consent record. Photographs are sent at full size
+and are never cached by the browser (`no-store`). `photo.php` serves only the owner; the public slideshow will need its own rule (`ARCHITECTURE.md`, section 9).
+
+---
+
 ## Windows and Ubuntu: what differs
 
 Both use the **same PHP source code and the same `schema.sql`**.
@@ -692,9 +1181,9 @@ In application code, paths are built with `__DIR__` and `DIRECTORY_SEPARATOR`, a
 * **Photographs.** Copy the contents of the upload folder (`storage/uploads` or your
   `UPLOAD_STORAGE_PATH`) together with the database export, because the database stores only file names.
 
-## Limitations (Steps 1 to 3)
+## Limitations (Steps 1 to 6)
 
-Built so far: the schema, the documentation, the configuration loader, the database connection and visitor registration.
+Built so far: the schema, the documentation, the configuration loader, the database connection, visitor registration, returning visitor identification (Step 4), photo uploads (Step 5) and the visitor gallery (Step 6). Steps 4 to 6 were executed only in a Linux sandbox (PHP command line and built-in server, MariaDB), never on Windows, XAMPP or in a real browser.
 Steps 2 and 3 have not been tested on Windows or XAMPP, in phpMyAdmin or in a real web browser (the AI tested them with a
 scripted HTTP client; see `AI_LOG.md`). Registration has no rate limiting, so someone could create many visitor records by
 repeating the form, and a lost visitor code cannot be recovered. Visitor names are stored as typed. The design is meant to

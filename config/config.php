@@ -348,6 +348,18 @@ function config_load(): array
     }
     $values['UPLOAD_MAX_FILES'] = $maxFiles;
 
+    // Step 5: the allowed image types, as a comma-separated list. Only the three types the
+    // project supports can be named; the list can only narrow them (for example "image/jpeg,image/png").
+    $mimeList = [];
+    foreach (explode(',', strtolower($read('UPLOAD_ALLOWED_MIME_TYPES', 'image/jpeg,image/png,image/webp'))) as $mimeType) {
+        $mimeType = trim($mimeType);
+        if (!in_array($mimeType, ['image/jpeg', 'image/png', 'image/webp'], true)) {
+            throw config_error('UPLOAD_ALLOWED_MIME_TYPES', 'must be a comma-separated list made only of image/jpeg, image/png and image/webp.');
+        }
+        $mimeList[$mimeType] = $mimeType;
+    }
+    $values['UPLOAD_ALLOWED_MIME_TYPES'] = implode(',', $mimeList);
+
     $loaded = ['values' => $values, 'sources' => $sources, 'file' => $file];
     return $loaded;
 }

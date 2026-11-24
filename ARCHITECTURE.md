@@ -1,7 +1,9 @@
 # Architecture
 
-Status: **Steps 1 to 3.** The database schema, the documentation, the configuration loader, the
-database connection and visitor registration exist. Sections that say "planned" describe code that has not been built yet.
+Status: **Steps 1 to 6.** The database schema, the documentation, the configuration loader, the
+database connection, visitor registration, visitor identification (Step 4), photo uploads (Step 5) and the visitor gallery with
+the private photo endpoint (Step 6) exist. Sections that say "planned" describe code that has not been built yet (the slideshow and
+the administrator pages).
 
 ---
 
@@ -256,36 +258,93 @@ for the same visitor and version are accepted. These are AI-environment tests, n
 
 ---
 
-## 7. Photo storage approach
+## 7. Photo storage approach (built in Step 5)
 
 * **No image data in MySQL.** The database holds only metadata (name, size, type, status).
-* Files are written to a **private directory**: `storage/uploads/` by default or `UPLOAD_STORAGE_PATH`.
-* **Server-generated names.** The stored name is random (32 hex characters) plus an extension chosen
-  from the detected MIME type. The visitor's original file name is saved only for display and is never
-  used to build a path. This blocks path tricks and name collisions between simultaneous uploads.
-* **Organized directories.** Files are grouped into sub-folders taken from the first characters of the
-  random name (for example `ab/cd/abcd….jpg`). The folder is calculated from the name, so the database
-  does not need a path column, and no single folder grows huge.
-* **Replaceable storage.** All file operations (save, open, delete) will sit in one `storage` module.
-  The database stores only `stored_filename`, never an absolute path, so moving to another storage
-  service later means rewriting that one module, not the whole application.
-* Uploads are validated by size, count and **detected** content type (not by the file extension the
-  visitor supplied).
+* Files are written to a **private directory**: `UPLOAD_STORAGE_PATH`, or `storage/uploads/` inside the project when that is empty.
+  **Recommended: a folder outside the project and outside the web root** (README, "Private photograph storage"). A folder inside the
+  project is protected only by web-server rules (`storage/.htaccess` and, on Ubuntu, the virtual host). Those rules are a safety net, not
+  something this design relies on, so the upload code writes a warning to the server log and `tests/check_upload.php` prints one
+  when the folder is inside the project.
+* **Server-generated names.** The stored name is 24 random bytes from `random_bytes()` written as 48 lower-case hex characters, a dot and an
+  extension chosen from the **detected** content type (`jpg`, `png` or `webp`), for example `3f9c…e1.jpg` (at most 53 characters; the column is 64).
+  The visitor's original file name is cleaned (last path part only, valid UTF-8, no control characters, at most 255 characters) and saved
+  only as metadata in `photos.original_filename`; it is never used to build a path.
+* **Organized directories.** Files are grouped into sub-folders named after the first two characters of the stored name
+  (`<storage>/3f/3f9c…e1.jpg`). The folder is calculated from the name, so the database needs no path column and no single folder grows huge.
+  `upload_stored_path()` accepts only names of exactly that shape, so no `..` or path separator can reach the file system.
+* **Files are never executed or served directly.** The extension comes from the content type, nothing in the storage folder is reachable
+  by a URL when the folder is outside the web root, and the later gallery and slideshow steps will stream files through PHP after checking
+  permission and consent.
+* **Replaceable storage.** All file operations sit in `includes/uploads.php`. The database stores only `stored_filename`, never an absolute path.
+* Uploads are validated by PHP upload error, size, count, **detected** content type (Fileinfo), the file name extension and
+  `getimagesize()` (the file must be a real image of that type), not by what the browser claims.
+
+### Built in Step 6: the visitor gallery and the private photo endpoint
+
+| File | Layer | Responsibility |
+|------|-------|----------------|
+| `gallery.php` | Presentation | Lists the identified visitor's photographs, 20 per page, with Previous/Next links, an upload link and the logout button. No SQL. |
+| `photo.php` | Presentation | `GET photo.php?id=N`: checks ownership and visibility, resolves the file safely, sends it with `readfile()`. |
+| `includes/gallery.php` | Application logic and data | The visibility rule as SQL (count, one page, one photograph), number and page validation, `gallery_resolve_file()` (safe path), `gallery_detect_mime()`. No HTML, no session code. |
+
+```
+gallery.php      session -> visitor id (from the server-side session only)
+                 COUNT(*) of visible photos            -> total, number of pages
+                 clamp the requested page into range   -> LIMIT 20 OFFSET (page-1)*20, newest first
+                 for each row: <img src="photo.php?id=N">   (no path, no stored name in the page)
+
+photo.php?id=N   1 GET/HEAD only                              else 405
+                 2 identified visitor (session)               else 401
+                 3 id is a positive whole number              else 400
+                 4 SELECT ... WHERE id = ? AND visitor_id = <session> AND status = 'active'
+                   INNER JOIN consents (same visitor)         else 404 (same answer as "not yours")
+                 5 stored name has the generated shape; realpath() of the file lies INSIDE
+                   realpath(UPLOAD_STORAGE_PATH); regular readable file   else 404
+                 6 Fileinfo says JPEG/PNG/WebP and equals photos.mime_type   else 404
+                 7 headers + readfile()
+```
+
+* **Ownership.** The visitor id is never read from the address or a form. The same `WHERE` clause that lists photographs also guards the
+  image endpoint, so changing the number in `photo.php?id=N` cannot reach another visitor's photograph: the query finds nothing.
+* **Visibility.** Own, `status = 'active'` and a matching consent record (see `ASSUMPTIONS.md`, I1-I3). The schema has no field that separates
+  "visible in my own gallery" from "approved for the public slideshow"; the safest rule was used and no field was invented.
+* **Path safety.** Three layers: the stored name must match `^[a-f0-9]{48}\.(jpg|png|webp)$` (so `..`, separators and `.php` cannot pass);
+  `realpath()` resolves the file and any symbolic link; the result must start with the real storage folder plus a separator (so a sibling
+  folder with a similar name does not pass; case-insensitive on Windows). Paths are never written to a page, a header or the error log.
+* **Never executed.** The file is sent only with a fixed `Content-Type` taken from the detected type (`image/jpeg`, `image/png`, `image/webp`),
+  `X-Content-Type-Options: nosniff`, `Content-Security-Policy: default-src 'none'; sandbox`, a generated `Content-Disposition` name
+  (`photo-<id>.<ext>`) and `Cross-Origin-Resource-Policy: same-origin`. PHP code inside a file named `.png` is detected as "not an image" and refused.
+* **Sessions.** `photo.php` closes the session (`session_write_close()`) before sending, so the many image requests of one gallery page do not queue behind each other.
+* **Pagination.** `COUNT(*)` for the total, then `LIMIT 20 OFFSET n` for the page only; nothing else is read into PHP memory. `ORDER BY p.id DESC`
+  follows `idx_photos_visitor` (InnoDB appends `id`). `OFFSET` is acceptable here because one visitor has few photographs; the slideshow (section 9) uses an id cursor instead.
+* **Content-Security-Policy.** Pages still send `default-src 'none'`. Only `gallery.php` adds `img-src 'self'` so the browser may load images from this site.
 
 ---
 
-## 8. Upload flow and consistency (planned)
+## 8. Upload flow and consistency (built in Step 5)
 
-1. Check count, size and type for each file.
-2. Confirm that the visitor has given consent for **this upload session**. Consent is asked for again in every
-   upload session, even if the visitor already consented to the same consent text version.
-3. Save files under random names in private storage.
-4. Inside **one database transaction**, insert a **new `consents` row** for this session, then insert all `photos`
-   rows that reference it.
-5. If anything fails, roll back the transaction and delete the files just written.
+`upload.php` (page) and `includes/uploads.php` (logic), in this order:
 
-Several visitors uploading at once is safe because names are random and unique, and each request
-has its own transaction.
+1. **Authentication:** `visitor_require_login()`. The visitor id comes only from the server-side session (Step 4); the form has no visitor field.
+2. **Request size:** a request larger than `post_max_size` arrives with an empty `$_POST` and `$_FILES`; it is reported as too large (HTTP 413).
+3. **CSRF token.**
+4. **Consent:** the consent box must be ticked in this request. Consent is never automatic and is asked for in every upload session.
+5. **File checks** (`upload_process()`): number of files (more than `UPLOAD_MAX_FILES` rejects the whole submission), then for each file the PHP
+   upload error, `is_uploaded_file()`, size (not empty, not above `UPLOAD_MAX_FILE_SIZE_BYTES`), Fileinfo type, extension for that type, and
+   `getimagesize()`. A file that fails is rejected and reported; the others continue.
+6. **Store:** every accepted file is moved into private storage under a random name.
+7. **Record:** in **one database transaction**: insert a new `consents` row (visitor, consent version, time) for this upload session, then one `photos`
+   row per stored file referring to that consent, with the visitor id, stored and original name, detected MIME type, size and status.
+8. **Failure:** on any technical failure the transaction is rolled back **and every file stored for this submission is deleted**, because a rollback
+   does not remove files. The visitor sees a generic message; details go to the server log.
+9. **Post-Redirect-Get:** on success the page redirects to `upload.php?done=1`, which shows the number of photographs saved once.
+
+The accepted files of one submission are stored all together or not at all. A consent row is created only when at least one photograph is stored.
+Several visitors uploading at once is safe because names are random and unique (the `stored_filename` key is `UNIQUE`) and each request has its own transaction.
+
+**Status of new photographs:** `photos.status` starts as `active`. The schema defines `active` as "eligible for the slideshow", every stored photograph
+has an explicit consent record (the foreign key makes a photograph without one impossible), and the project has no approval step. No page shows photographs yet.
 
 ---
 
@@ -297,7 +356,9 @@ has its own transaction.
 * Only photographs with `status = 'active'` are used. Every photograph has a consent record because
   `consent_id` is mandatory.
 * The page displays the image through a PHP "serve photo" script, which re-checks that the photograph
-  is allowed, sets the correct content type and streams the file from private storage.
+  is allowed, sets the correct content type and streams the file from private storage. Step 6 built such a script
+  for a visitor's **own** photographs (`photo.php`, section 7). The slideshow is public, so it needs its own rule
+  and endpoint: `photo.php` must not be reused for it, because it deliberately serves only to the owner.
 * Display time comes from the `settings` table, falling back to `SLIDESHOW_DEFAULT_DURATION_SECONDS`.
 * Because JavaScript is not used, the page advances with an HTML `<meta http-equiv="refresh">`
   carrying the next cursor. This causes a full page reload per photograph. Whether JavaScript may be
@@ -307,7 +368,7 @@ has its own transaction.
 
 ## 10. How returning visitors are handled (planned)
 
-1. The visitor enters their code; the application hashes it (with `visitor_code_hash()`, the same function registration uses) and looks up `visitors`. *(Not built yet.)*
+1. The visitor enters their code; the application hashes it (with `visitor_code_hash()`, the same function registration uses) and looks up `visitors`. *(Built in Step 4: `identify.php`.)*
 2. If found, the visitor's earlier photographs stay in place; new uploads are added alongside them.
 3. Every new upload session asks for consent again, even if the visitor consented earlier to the same
    consent version. A new `consents` row is created for that session before any new photograph is accepted.
@@ -344,3 +405,6 @@ It has not been load-tested.
 | No backups | Scheduled database dumps and file backups |
 | Slideshow reloads the page | Use JavaScript if the brief allows it |
 | Consent withdrawal not modelled | Add a withdrawal timestamp if required |
+| The gallery shows full-size files scaled by the browser (Step 6) | Generate thumbnails (needs an image library) |
+| A visitor cannot see photographs with status `hidden`, and the schema cannot say why a photograph is hidden (Step 6) | Add a field or status that separates "removed by an administrator" from "hidden by the visitor" |
+| `consent_version` is not compared with the current consent text (Step 6) | Decide when an old consent version stops being valid |

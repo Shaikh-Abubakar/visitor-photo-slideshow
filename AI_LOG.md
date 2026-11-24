@@ -309,3 +309,204 @@ All are listed with reasons in `ASSUMPTIONS.md`, section G. The student should r
 * Decisions I accepted or rejected (including the seven above and `ASSUMPTIONS.md`, G1 to G16; especially G1, SHA-256 or HMAC):
 * Tests I ran myself, where (for example `register.php` on XAMPP and phpMyAdmin), and the results:
 * Things I could not explain yet:
+
+---
+
+## Step 4: Returning visitor identification
+
+| Item | Detail |
+|------|--------|
+| Date | 2026-11-24 |
+| AI tool | Claude Sonnet 5.5 (Anthropic), used in the Claude app chat with a code-execution sandbox. **The sandbox had no PHP, no MySQL/MariaDB, no web server and no network access, so none of the code could be run.** |
+| Prompts given | "Implement Step 4: Returning Visitor Identification" (role, context, strict technology restriction: PHP 8 and MySQL/MariaDB only, no JavaScript, CSS or frameworks; instructions 1-8; testing requirements 1-11; completion report; stop condition: no uploads, gallery, slideshow, admin or Step 5). The project ZIP was supplied with the prompt. |
+| Scope | New: `identify.php`, `includes/visitor_auth.php`, `tests/check_identify.php`. Updated: `README.md`, this log. **Not changed:** `register.php`, `includes/bootstrap.php`, `includes/security.php`, `includes/visitors.php`, `config/*`, `database/schema.sql`, `tests/check_database.php`, `.env`, `.env.example`, `ASSUMPTIONS.md`, `ARCHITECTURE.md`. |
+| Inspected first | The whole ZIP was unpacked and read before writing code: `includes/visitors.php` (Step 3 code format and hashing), `includes/security.php` (session, CSRF, headers), `includes/bootstrap.php`, `config/*`, `register.php`, `database/schema.sql`, `README.md`, `AI_LOG.md`, `ASSUMPTIONS.md`. |
+
+### What the AI produced
+
+* `includes/visitor_auth.php`: `visitor_find_by_code()` (prepared `SELECT id, name ... WHERE visitor_code_hash = ?`, using Step 3's `visitor_code_hash()` unchanged), `visitor_login()` (session id regenerated, only id, name and time stored), `visitor_current()`, `visitor_is_authenticated()`, `visitor_require_login()`, `visitor_logout()`, and a wrong-code throttle (session counter plus a per-address counter file in the system temp folder).
+* `identify.php`: form, CSRF check, throttle check, lookup, Post-Redirect-Get for success and for failure, welcome page, logout button. HTML written by PHP only.
+* `tests/check_identify.php`: a command-line logic check that runs in a transaction and rolls it back.
+* README: a Step 4 section (how it works, XAMPP and Ubuntu steps, 14 tests with an empty "Your result" column, phpMyAdmin queries, common problems).
+
+### How the Step 3 format was followed
+
+The code format and the hash rule were not re-implemented: Step 3's `visitor_code_normalize()` (capitals, no hyphens or white space) and `visitor_code_hash()` (SHA-256, 64 lower-case hex characters) are called as they are. The only new rule is a shape check before the database is touched: after normalisation a code must be exactly 32 characters from `A-Z2-7`, which is what 20 random bytes in Base32 always give (Step 3, `VISITOR_CODE_BYTES`). `visitor_register()` is not called by any page of Step 4.
+
+### Design decisions the AI made (not stated in the prompt)
+
+The student should review these.
+
+1. **Failures also use Post-Redirect-Get** (message kept in the session for one page view), not only success, so refreshing never re-posts a wrong code.
+2. **Two throttle counters, no table:** 5 wrong codes per session and 30 per client address, in a 15-minute window. The address counter is a file in `sys_get_temp_dir()` because a session counter alone is defeated by deleting the cookie. The limits (5, 30, 15 minutes) are my choice. Behind a shared address (a college lab, or everyone testing on `127.0.0.1`) 30 wrong codes lock that address for 15 minutes. While locked, the code is not looked up.
+3. **A successful identification does not reset the address counter**, so one valid code cannot be used to reset it.
+4. **Identification lasts 2 hours** and is not re-checked against the database on every request.
+5. **An identified visitor must press "End my session" before identifying as someone else**; a second identification while identified is ignored.
+6. **Logout empties the whole session and replaces the id** (`session_regenerate_id(true)`) instead of destroying and restarting it. This also removes a pending registration result (which holds a plaintext code) from the session.
+7. **The welcome page shows the visitor number** (the database `id`) so it can be compared with phpMyAdmin. It never shows the hash.
+8. **The pending registration result of Step 3 is left alone** by identification (it still expires after 15 minutes, or on logout).
+9. **A bounded `tests/check_identify.php` was added** although the prompt did not name it, so the logic part of the tests can be run on the student's machine with one command.
+10. **The session id is regenerated here, unlike in Step 3** (where it caused a double-click problem). A double click on **Identify me** may therefore run the identification twice; this is harmless because it only repeats "set the same identity" and inserts nothing. This reasoning has **not** been tested.
+
+### Problems and mistakes (honest account)
+
+* **No test could be run.** PHP, MySQL and MariaDB were not installed in the sandbox and could not be installed (no network). Not even `php -l` (syntax check) was possible. The only check made was a crude count of matching brackets in the three new PHP files, which says nothing about correctness. A typo or a logic error may still be present; the first run on the student's machine is the first real test.
+* **The prompt's testing requirements 1-11 and the "Which tests actually passed" part of the completion report therefore cannot be answered with results.** Nothing is claimed as passed.
+* **Stray files in the supplied ZIP:** the project root contains `visitors.php` and `security.php`, byte-identical to `includes/visitors.php` and `includes/security.php`. Nothing loads them (they exit with 403 if requested directly). They were left untouched.
+* **Step 3's `register.php` defines `redirect_to()`, `page_start()` and `page_end()` as global functions inside the page,** so they could not be reused without editing it. Step 4 has its own `visitor_auth_redirect()` and `identify_page_*()` functions with different names, so a future page may load both without a name clash.
+* **Step 1/3 documents still say HMAC with `VISITOR_CODE_PEPPER` in places** (`ASSUMPTIONS.md` B2, `ARCHITECTURE.md`); Step 3 decided on plain SHA-256 (G1) and Step 4 follows that. The open question E4 (SHA-256 or HMAC) is still undecided and matters more now: changing it after visitors exist invalidates every code.
+
+### Verification performed (Step 4)
+
+| Check | Result |
+|-------|--------|
+| Any PHP syntax check, any execution of the new code, any database test, any browser test | **Not performed.** No PHP or database in the sandbox. |
+| Bracket count (`{ } ( ) [ ]`) in `identify.php`, `includes/visitor_auth.php`, `tests/check_identify.php` | Each file has equal numbers of opening and closing brackets (crude text check on stripped text only). |
+| Code read-through against the requirements | Done by reading: the code is hashed in PHP and only the hash is queried; the query is a prepared statement; the code is not echoed into the page, not written to the session, not logged; session id regenerated on login; CSRF checked before anything else; output escaped with `html_escape()` (`htmlspecialchars`); paths built with `__DIR__`; no database credentials in the new files; no schema change. This is a review, not a test. |
+
+**Not verified** (by anyone): everything that runs, including all of the testing requirements 1-11 of the prompt; the Windows, XAMPP and phpMyAdmin steps; the throttle file locking on Windows; behaviour in a real browser.
+
+**Tests performed by the student:** none recorded yet. Record them in the "Your result" column of the README table and below.
+
+### Student review (to be completed by the student)
+
+* What I checked and understood:
+* What I changed, and why:
+* Decisions I accepted or rejected (including the ten above):
+* Tests I ran myself, where (for example `identify.php` on XAMPP and phpMyAdmin, and `tests/check_identify.php`), and the results:
+* Things I could not explain yet:
+
+---
+
+## Step 5: Secure multiple photo uploads
+
+| Item | Detail |
+|------|--------|
+| Date | 2026-11-24 |
+| AI tool | Claude Sonnet 5.5 (Anthropic), used in the Claude app chat with a code-execution sandbox. **The sandbox had no PHP, no MySQL/MariaDB, no web server and no network access, so none of the code could be run.** Python with Pillow was available and was used only to create the three tiny test images embedded in `tests/check_upload.php` (and to confirm that Pillow can re-open them). |
+| Prompts given | "Implement Step 5: Secure Multiple Photo Uploads" (role, context, strict technology restriction, instructions 1-10, testing requirements 1-14, completion report, stop condition: no gallery, slideshow, admin dashboard or photo management, no Step 6). No ZIP was attached to this prompt; the AI continued from the project folder of Step 4 in the same conversation (which includes the Step 4 files written by the AI, also never run). |
+| Scope | New: `upload.php`, `includes/uploads.php`, `tests/check_upload.php`. Changed: `config/config.php` (one block: reads `UPLOAD_ALLOWED_MIME_TYPES`), `.env.example` (comment and position of that setting), `README.md`, `ASSUMPTIONS.md` (section H), `ARCHITECTURE.md` (sections 7 and 8, one line in section 10), this log. **Not changed:** `register.php`, `identify.php`, `includes/bootstrap.php`, `includes/security.php`, `includes/visitors.php`, `includes/visitor_auth.php`, `config/database.php`, `database/schema.sql`, `.env`, `tests/check_database.php`, `tests/check_identify.php`. |
+
+### Schema inspected before writing code (by reading `database/schema.sql`)
+
+* `photos`: `id`, `visitor_id`, `consent_id` (NOT NULL), `stored_filename VARCHAR(64) UNIQUE`, `original_filename VARCHAR(255)`, `mime_type VARCHAR(50)`, `file_size INT UNSIGNED`, `status VARCHAR(20) DEFAULT 'active'` with `CHECK (status IN ('active','hidden'))`, `uploaded_at DEFAULT CURRENT_TIMESTAMP`. Foreign keys: `fk_photos_visitor`, and the composite `fk_photos_consent (consent_id, visitor_id)` that forces the consent to belong to the same visitor.
+* `consents`: `id`, `visitor_id`, `consent_version VARCHAR(20)`, `consented_at DEFAULT CURRENT_TIMESTAMP`; **no** unique key on `(visitor_id, consent_version)` (a new row per upload session is allowed), `uq_consents_id_visitor` for the composite key.
+* Result: every column the upload needs exists. **No schema change was made or needed.** `tests/check_upload.php` re-checks the column lists and the two foreign keys of `photos` against the real database.
+
+### What the AI produced
+
+* `includes/uploads.php`: validation (PHP error code, `is_uploaded_file`, size, Fileinfo MIME, extension for the type, `getimagesize`), cleaning of the original name, random stored names (`random_bytes(24)`, 48 hex characters), path building that accepts only that name shape, storage folder check, and `upload_process()` (move files, one transaction with a new `consents` row and the `photos` rows, deletion of the stored files on any failure).
+* `upload.php`: login check first, then request size, CSRF, consent, files; Post-Redirect-Get; result shown once.
+* `tests/check_upload.php`: a command-line check that exercises `upload_process()` for tests 1-9 and 13 of the brief (rolled back; temporary folder deleted).
+* Documentation: README (Step 5 section with Windows and Ubuntu private-storage set-up, 16 browser tests with an empty "Your result" column, phpMyAdmin queries), `ASSUMPTIONS.md` H1-H13, `ARCHITECTURE.md`.
+
+### Design decisions the AI made (not stated in the prompt)
+
+All are listed with reasons in `ASSUMPTIONS.md`, section H. The student should review them, above all:
+
+1. **Initial status `active`** (H6): the schema defines `active` as "eligible for the slideshow", consent is mandatory, and there is no approval step. The brief says photographs must not become public "merely because they were uploaded"; nothing shows photographs yet, but the **later slideshow step must itself check consent and status.** If an approval step is wanted, change `UPLOAD_INITIAL_STATUS` to `hidden`.
+2. **One upload session = one form submission = one new `consents` row** (H5), created only if at least one photograph is stored.
+3. **More than 10 files rejects the whole submission, a bad single file rejects only itself** (H3); the accepted files are then stored all together or not at all (H4).
+4. **Extra checks beyond the brief:** the extension must fit the detected type, and `getimagesize()` must confirm a real image (H2).
+5. **The default storage folder stays inside the project** (H9) so the XAMPP quick start works; the README recommends a folder outside the web root and the code logs a warning when the folder is inside the project. The brief says not to rely on `.htaccess` alone; with the default folder the application still does, until the student sets `UPLOAD_STORAGE_PATH`.
+6. **`config/config.php` was changed** (one block) so `UPLOAD_ALLOWED_MIME_TYPES` is really read; before this step it was only listed in `.env.example`.
+7. **Stored files sit in a sub-folder named after the first two characters of the name** (as `ARCHITECTURE.md` section 7 planned); the architecture text was corrected from 32 to 48 hex characters.
+
+### Problems and mistakes (honest account)
+
+* **No test could be run.** PHP, MySQL and MariaDB were not installed and could not be installed (no network). Not even `php -l` was possible. Only a crude count of matching brackets in the new and changed PHP files was made, which says nothing about correctness. The new files may contain a typo or a logic error.
+* **The testing requirements 1-14 of the prompt and "Which tests actually passed" therefore have no results.** Nothing is claimed as passed. `tests/check_upload.php` was written to be run by the student; it has itself never been run, so it may contain mistakes (a failing line may point at the test, not at the application).
+* **A test that could not fail was written and then removed** while reviewing `tests/check_upload.php`: one check ended in `|| true`, so it would always pass. It now has a real condition.
+* **Not testable from the command line, so only by hand:** login redirect, CSRF rejection, missing consent, the 413 "too large" case, and everything in a real browser (README tests 1, 10-14). The consent check lives in `upload.php`, not in `upload_process()`.
+* **PHP limits:** `upload_max_filesize`, `post_max_size` and `max_file_uploads` in `php.ini` apply before the application runs. If `max_file_uploads` is below the application limit, PHP silently drops extra files, and the application cannot see that. The README says so.
+* **Step 4 is still unrun** (see the Step 4 entry), and Step 5 depends on it: if identification fails, uploads cannot be tested.
+* **The command line may use another `php.ini` than Apache,** so `tests/check_upload.php` can report different limits than the web server uses.
+
+### Verification performed (Step 5)
+
+| Check | Result |
+|-------|--------|
+| Any PHP syntax check, any execution of the new code, any database test, any browser test | **Not performed.** No PHP or database in the sandbox. |
+| Bracket count (`{ } ( ) [ ]`) in `upload.php`, `includes/uploads.php`, `tests/check_upload.php`, `config/config.php` | Equal numbers of opening and closing brackets in the three new files. For `config/config.php` the crude check reports unequal numbers **both in the supplied original and after my edit, with identical counts** (the check is fooled by quote characters in that file's strings), so it shows only that my added block is balanced, not that the file is. Crude text check only. |
+| Test images | Created with Pillow (JPEG, PNG, WebP, GIF, 4 x 4 pixels), re-opened with Pillow successfully, embedded as base64. **Not checked with PHP's `finfo` or `getimagesize`.** |
+| Schema read-through | Done by reading `schema.sql`: see the section above. |
+| Code read-through against the requirements | Done by reading: authentication before anything else, the visitor id taken only from the session, no visitor field in the form, CSRF and consent before files, random names from `random_bytes`, original name never used in a path, prepared statements only, one transaction, files deleted on failure, output escaped with `html_escape()`, no `chmod 777`, no paths or database errors shown, paths built with `DIRECTORY_SEPARATOR`. This is a review, not a test. |
+
+**Not verified** (by anyone): everything that runs, including all of the testing requirements 1-14; Windows, XAMPP and phpMyAdmin steps; `icacls` and `chmod` commands; PHP's behaviour with real browser uploads; WebP detection by the Fileinfo database of the student's PHP build.
+
+**Tests performed by the student:** none recorded yet. Record them in the "Your result" column of the README table and below.
+
+### Student review (to be completed by the student)
+
+* What I checked and understood:
+* What I changed, and why:
+* Decisions I accepted or rejected (including the seven above and `ASSUMPTIONS.md`, H1 to H13):
+* Tests I ran myself, where (for example `upload.php` on XAMPP, phpMyAdmin, `tests/check_upload.php`), and the results:
+* Things I could not explain yet:
+
+---
+
+## Step 6: Visitor photo gallery
+
+| Item | Detail |
+|------|--------|
+| Date | 2026-11-24 |
+| AI tool | Claude Sonnet 5.5 (Anthropic), used in the Claude app chat with a code-execution sandbox. **Unlike Steps 4 and 5, this sandbox allowed installing PHP 8.3.6 (command line) and MariaDB 10.11.14 from the Ubuntu repositories, so the code was actually run.** The sandbox is Linux; PHP's built-in web server and `curl` were used instead of Apache and a browser. |
+| Prompts given | "Implement Step 6: Visitor Photo Gallery" (role, context, strict technology restriction, instructions 1-8, testing requirements 1-14, completion report, stop condition: no slideshow, no administrator pages, no Step 7). The project ZIP (uploaded as `visitor-photo-slideshow__2_.zip`) was attached; its files were inspected before any change. |
+| Scope | New: `gallery.php`, `photo.php`, `includes/gallery.php`, `tests/check_gallery.php`. Changed: `includes/security.php` (`send_security_headers()` got an optional parameter, default `false`, that adds `img-src 'self'`), `upload.php` and `identify.php` (one link line each), `README.md`, `ARCHITECTURE.md`, `ASSUMPTIONS.md` (section I), this log. **Not changed:** `register.php`, `config/*`, `includes/bootstrap.php`, `includes/visitors.php`, `includes/visitor_auth.php`, `includes/uploads.php`, `database/schema.sql`, `.env`, `tests/check_database.php`, `tests/check_identify.php`, `tests/check_upload.php`, and the files in `storage/uploads`. |
+
+### Project and schema inspected before writing code
+
+* Read: `database/schema.sql`, `config/config.php`, `config/database.php`, `includes/bootstrap.php`, `includes/security.php`, `includes/visitor_auth.php`, `includes/uploads.php`, `includes/visitors.php`, `upload.php`, `identify.php`, the three test scripts, `.env.example`, `storage/.htaccess`, and the documentation. `.env` was not printed or changed; the tests used environment variables instead.
+* `photos`: `id`, `visitor_id`, `consent_id` (NOT NULL), `stored_filename` (UNIQUE), `original_filename`, `mime_type`, `file_size`, `status VARCHAR(20)` with `CHECK (status IN ('active','hidden'))`, `uploaded_at`; index `idx_photos_visitor (visitor_id)`; composite foreign key `fk_photos_consent (consent_id, visitor_id)` to `consents (id, visitor_id)`.
+* `consents`: `id`, `visitor_id`, `consent_version`, `consented_at`.
+* **Finding:** the schema has no field that separates "visitor may see their own photograph" from "approved for the public slideshow", and no `deleted` or `rejected` status. As the brief asks, the limitation is explained (`ASSUMPTIONS.md`, I1-I3) and the safest behaviour was implemented without inventing a field: only own, `active` photographs with a matching consent record are shown.
+* **Finding:** `send_security_headers()` (Step 3) sends `Content-Security-Policy: default-src 'none'`, which blocks every `<img>`. The gallery cannot show a photograph under it, so the function got one optional parameter. Nothing else in that policy was loosened, and no other page changed behaviour.
+
+### What the AI produced
+
+* `includes/gallery.php`: positive-integer validation (`\z`, at most 15 digits), page arithmetic, three prepared queries (count, one page, one photograph) that share the same visibility rule, `gallery_resolve_file()` (generated-name shape, `realpath()`, inside the real storage folder, regular readable file) and `gallery_detect_mime()` (Fileinfo).
+* `gallery.php`: login check, page validation and clamping, table of photographs, Previous/Next links, upload link, POST logout form with CSRF token (reusing the Step 4 logout in `identify.php`), a neutral message on a technical failure.
+* `photo.php`: the seven ordered checks, then `readfile()` with `Content-Type`, `Content-Length`, `nosniff`, `no-store`, a sandboxing CSP, `Cross-Origin-Resource-Policy` and a generated file name. The session is closed before sending.
+* `tests/check_gallery.php`: 64 checks (validation, visibility, ownership, pagination arithmetic and real pages, path safety including a symbolic link, a PHP file named `.png`, a directory with a photograph's name); rolled back; temporary folder deleted.
+
+### Design decisions the AI made (not stated in the prompt)
+
+All are listed with reasons in `ASSUMPTIONS.md`, section I. The student should review them, above all:
+
+1. **Hidden photographs are not shown to their owner (I2).** Safer than showing them, but a visitor cannot see a photograph that an administrator or a database edit hid.
+2. **Consent is "a consent record exists for that visitor"; its version is not compared with the current text (I3).** If the consent wording changes, someone must decide what happens to old consents.
+3. **404 for everything that is not a clean success (I5)**, so photo numbers cannot be probed. 401 (not a redirect) for an unidentified request to `photo.php`.
+4. **`no-store` for photographs (I8):** safer on shared computers, more traffic.
+5. **No thumbnails (I9):** the browser scales full-size files; a page of 20 large photographs is heavy. `loading="lazy"` is used.
+6. **Existing files were touched in three places (I10):** the optional header parameter and two link lines.
+
+### Problems and mistakes (honest account)
+
+* **A real bug was found by `tests/check_gallery.php` and fixed:** the number check used `$` in a regular expression; in PHP `$` also matches before a final line break, so `"1"` followed by a line break was accepted as a valid number. Harmless in practice (it cast to 1), but wrong. It now uses `\z`, and the check passes. The same loose `$` exists in the Step 5 function `upload_stored_path()`; it was **not** changed (out of scope), and it cannot be exploited by the gallery because the stored name comes from the database and a name with a line break would not resolve to a file.
+* **Several of my own test lines failed at first, for four reasons, because the test was wrong and not the application:** a "no stored file name in the page" pattern matched part of the 64-character CSRF token; a hostile `</script>` file name had already been cut down by the Step 5 name cleaning (everything before the last `/` is dropped), so it never reached the gallery; a hostile visitor name was refused by the Step 3 name rules (so it can never reach the database through the application); and a quoting mistake in one script line. Each was corrected and the checks were re-run; none of them hid an application fault.
+* **An early sandbox slip:** the first test run found no web server because the background processes ended with the shell; they were restarted and the whole run was repeated.
+* **Browser behaviour was not observed.** `curl` does not apply a `Content-Security-Policy`. That the thumbnails display under `img-src 'self'`, and that links and the button look right, is checked only by reading the header and the generated HTML.
+
+### Verification performed (Step 6)
+
+| Check | Result |
+|-------|--------|
+| `php -l` on every PHP file of the project | No syntax errors |
+| `tests/check_gallery.php` (PHP 8.3.6, MariaDB 10.11.14) | `RESULT: PASS - 64 passed, 0 failed` (after the `\z` fix; the first run had 1 failure, the newline case) |
+| `tests/check_database.php`, `tests/check_identify.php`, `tests/check_upload.php` (Steps 2, 4, 5) | PASS; 22 and 42 checks passed, 0 failed |
+| Live flow over HTTP (`php -S`, `curl`): register 5 visitors, identify, 5 upload submissions, gallery, `photo.php`, logout | All behaved as described in the README table *What was actually tested* (testing requirements 1-14 each executed; hidden, damaged-consent, missing-file, fake-image and path-traversal cases simulated by editing the sandbox database or files and then restoring them) |
+| Real photograph bytes | The bytes sent by `photo.php` were identical to the uploaded files (PNG, JPEG, WebP) |
+
+**Not verified** (by anyone): Windows, XAMPP, Apache `.htaccess` behaviour, Ubuntu with Apache, phpMyAdmin steps, any real browser (including how images render under the Content-Security-Policy), and the `icacls`/`chmod` commands of earlier steps.
+
+**Tests performed by the student:** none recorded yet. Record them in the "Your result" column of the README table and below.
+
+### Student review (to be completed by the student)
+
+* What I checked and understood:
+* What I changed, and why:
+* Decisions I accepted or rejected (including the six above and `ASSUMPTIONS.md`, I1 to I12):
+* Tests I ran myself, where (for example `gallery.php` on XAMPP, phpMyAdmin, `tests/check_gallery.php`), and the results:
+* Things I could not explain yet:
+
