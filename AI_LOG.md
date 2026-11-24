@@ -224,3 +224,88 @@ All are listed with reasons in `ASSUMPTIONS.md`, section F, and should be review
 * Decisions I accepted or rejected (including the six above and `ASSUMPTIONS.md`, F1 to F15):
 * Tests I ran myself, where (for example `tests/check_database.php` on XAMPP), and the results:
 * Things I could not explain yet:
+
+---
+
+## Step 3: Visitor registration
+
+| Item | Detail |
+|------|--------|
+| Date | 2026-11-24 |
+| AI tool | Claude Sonnet 5.5 (Anthropic), used in the Claude app chat with a code-execution sandbox: Ubuntu 24.04, PHP 8.3.6 (command line, the built-in web server, and mod_php under Apache 2.4.58), **MariaDB 10.11.14** (first) and then **MySQL 8.0.46** (the sandbox had neither installed; the AI installed them for these tests) |
+| Prompts given | "Implement Step 3: Visitor Registration" (role, context, strict technology restriction: PHP 8 and MySQL/MariaDB only, no JavaScript, CSS or frameworks; instructions 1-7; testing requirements 1-8; completion report; stop condition: no returning-visitor identification, uploads, gallery, slideshow, admin or Step 4). |
+| Scope | New: `register.php`, `includes/security.php`, `includes/visitors.php`. Updated: `README.md`, `ARCHITECTURE.md`, `ASSUMPTIONS.md`, this log. **No change** to `database/schema.sql`, `config/config.php`, `config/database.php`, `includes/bootstrap.php` or `tests/check_database.php` (confirmed byte for byte against the supplied copies). |
+| Not inspected | The AI received nine files (the four documents, `config.php`, `database.php`, `bootstrap.php`, `check_database.php`, `schema.sql`), **not** the project ZIP the prompt mentions. `.env.example`, `.gitignore`, the `.htaccess` files and the folder tree were not available. The AI rebuilt the folder layout described in `README.md` for testing, so the new files must be copied into the student's real project. |
+
+### What the AI produced
+
+* `register.php` (about 230 lines): the form, the request handling (CSRF check, validation, insert, Post-Redirect-Get) and the result page. All HTML is written by PHP; no CSS, no JavaScript, no separate HTML file.
+* `includes/security.php`: secure session start, CSRF token functions, security headers, `html_escape()`.
+* `includes/visitors.php`: `visitor_name_validate()`, `visitor_code_generate()`, `visitor_code_hash()`, `visitor_register()` (prepared `INSERT`, collision retry).
+* Documentation: README Step 3 section (XAMPP and Ubuntu test steps, phpMyAdmin verification), architecture (flow, new files), assumptions G1-G16 and open question E4.
+
+The AI **inspected `schema.sql`** before writing database code and confirmed the `visitors` columns: `id BIGINT UNSIGNED AUTO_INCREMENT`, `name VARCHAR(100) NOT NULL`, `visitor_code_hash CHAR(64) NOT NULL` with `UNIQUE KEY uq_visitors_code_hash`, `created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP`. It also checked the imported table with `SHOW COLUMNS` and `SHOW INDEX`. No schema change was needed.
+
+### Design decisions the AI made (not stated in the prompt)
+
+All are listed with reasons in `ASSUMPTIONS.md`, section G. The student should review them, above all the first:
+
+1. **Plain SHA-256 instead of the HMAC of Step 1 (G1).** The Step 3 prompt says "SHA-256"; `ARCHITECTURE.md` and `ASSUMPTIONS.md` (B2) from Step 1 said HMAC-SHA-256 with a secret `VISITOR_CODE_PEPPER`, which the Step 2 loader does not read. The AI followed the Step 3 prompt and wrote the difference into the documents. **This needs the student's decision before real visitors register** (`ASSUMPTIONS.md`, E4).
+2. Code format: 160 random bits from `random_bytes()`, Base32, 8 groups of 4 (G2); the hash is taken over the code without hyphens and in capitals (G3).
+3. Name rules: 2 to 100 characters, letters/space/hyphen/apostrophe/full stop only (G4). These may refuse some real names.
+4. Collision handling by the database's unique key plus retry, not by looking the hash up first (G5).
+5. The result stays in the session for 15 minutes, so the code can be refreshed (G6); this means the plaintext code sits in the server's session file for that time (G7).
+6. Single-use CSRF token; stale or double submissions are redirected to the pending result (G8).
+7. Two helper files beyond the `register.php` named in the prompt (G13).
+
+### Problems and mistakes (honest account)
+
+* **A real defect in the AI's code, found by its own test.** After a successful registration the first version called `session_regenerate_id(true)`. A test that sent two simultaneous `POST` requests from one session (a double click) created **two visitors** (`rows=2`). Cause: the second request was already waiting for the old session file; renewing the id deleted that file, so the waiting request read the old data (old token still valid, no result yet) and registered again. Correction: the call and the helper function were removed (registering gives no extra rights, so renewing the id was not needed), and the token rotation is now written to the same session the waiting request reads. After the fix the test passed on 5 repeated runs (built-in server) and 5 runs with 4 simultaneous requests each (Apache), on both database servers.
+* **Mistakes in the AI's test scripts (not in the project code):** (1) one case meant to send invalid UTF-8 first sent a valid name by accident, so the next request with the old token was correctly redirected and the test reported a failure (61 of 62 passed); the script was corrected and 62 of 62 passed. (2) A check for the host name in a failed response also looked at the response headers, which contain the `Host` header that the test itself sent; it was restricted to the page body.
+* **Conflict between documents:** SHA-256 (Step 3 prompt) against HMAC (Step 1 design). See decision 1.
+* **Observation on an earlier step:** when `includes/bootstrap.php` is requested directly on the PHP built-in server, which has no folder deny rules, it answers 200 with an empty body (it runs the bootstrap and prints nothing). Under Apache with the README's virtual host it answered 403. It is a Step 2 file and was left unchanged; the deny rules in the README are what protect it.
+* Sandbox set-up problems (the database server stopped when the first shell ended; a `pkill` pattern matched its own shell; MySQL needed a re-initialised data directory) were environment issues, not project defects.
+
+### Verification performed (Step 3)
+
+**Who ran these tests:** the AI, in its own sandbox (above). **The student has not run any of them.** The tests used scripted HTTP clients and `php` on the command line, **not a real web browser**. The test scripts are not part of the project. All test visitor rows were deleted afterwards. Unless stated, each suite was run on **both MariaDB 10.11.14 and MySQL 8.0.46** and on the final code; all results below are the final results of those runs.
+
+| Check | Actual result |
+|-------|---------------|
+| PHP syntax (`php -l`) on all PHP files | No syntax errors (PHP 8.3.6) |
+| Logic suite (`visitors.php`, 51 checks) | 51 passed, 0 failed, on both servers: Base32 encoder against all 7 RFC 4648 test vectors; 20,000 generated codes all in the expected format and all different, all 32 symbols evenly used; hash is 64 lower-case hex and equals `sha256` of the code without hyphens; lower-case/no-hyphen forms give the same hash; 10 names accepted (including Devanagari, accents, apostrophes) and 16 rejected; `NULL`, array and int input rejected; invalid UTF-8 rejected |
+| Collision retry (forced with a test generator) | A generator that returned an existing code twice, then a new one: 3 attempts, one new row, the first visitor untouched. A generator that always returned the same code: gave up after exactly 5 attempts, stored no row, the exception message contained neither code nor hash. A different database error (name too long, error 1406) was **not** swallowed as a collision |
+| Prepared statement | A name containing `'); DROP TABLE visitors;--` (sent past the validator on purpose) was stored literally and the table still existed |
+| HTTP suite, 62 checks, PHP built-in server **and** Apache 2.4.58 + mod_php (README virtual host and permission commands, running as `www-data`) | 62 of 62 passed on each, on both database servers |
+| Test 1-4 (brief): valid name, row inserted, hash not code, code displayed | `POST` answered 303 to `register.php?registered=1` with an empty body; the result page showed the success text and a code in the format `XXXX-XXXX-...` (39 characters); one new row; name stored with extra spaces removed; the stored hash was 64 hex characters and equal to SHA-256 of the code without hyphens; a **full database dump** contained the code neither with nor without hyphens; the hash was not on the page |
+| Test 5: refresh | 3 refreshes of the result page and a fresh open of `register.php` showed the **same code**; row count unchanged. Re-sending the old form (stale token) and sending a valid token while a result was pending both created no row and redirected to the result |
+| Double click | 2 simultaneous `POST`s from one session (built-in server, 5 runs) and 4 (Apache, 5 runs): exactly **1** row each time (after the correction above; the first version produced 2) |
+| 20 simultaneous visitors | 20 different sessions registered at once: 20 rows, 20 different codes, 20 different hashes |
+| Test 6: validation | Rejected with HTTP 422 and no row: empty, spaces only, tabs/newlines, one letter, digits, leading symbol, `<b>Bob</b>`, `<script>`, 101 characters, SQL text, control character, missing field, name sent as an array, invalid UTF-8. 100 characters accepted. Hostile input was shown escaped (`&lt;b&gt;`) when the form was redisplayed. Devanagari, accented, apostrophe/hyphen/full-stop names were accepted and stored unchanged |
+| Test 7: CSRF | Wrong, missing, empty, array-valued token, and a real token of another session without a cookie: all HTTP 403 and no row. The form shown with the 403 carried a working token. The README's literal `curl` command returned `HTTP/1.1 403 Forbidden` on the built-in server and on Apache, and added no row |
+| Other requests | `PUT` and `DELETE` gave 405 with an `Allow` header; unknown action 400; result URL without a session showed the form with an explanatory notice and no code; a result aged by 901 seconds (the session file was edited) was no longer shown |
+| Failure handling | Wrong database password and unreachable database server: HTTP 500, generic message, form shown again with the typed name, no row; the response contained no password, user name, SQL, class name or file path; the server log held the technical reason but not the password |
+| Production mode (`APP_ENV=production`) | Registration worked; no PHP warnings or notices in the output |
+| Session cookie | `HttpOnly; SameSite=Lax` on http; with `APP_URL=https://...` the `Secure` flag was added (the header was inspected; no real HTTPS connection was made) |
+| HTML | Form, result and error pages: tags balanced (checked with Python's HTML parser); no `<script>`, `<style>`, `style=`, image or external resource in the output |
+| Private files over HTTP (Apache, README rules) | `/.env`, `/config/config.php`, `/includes/visitors.php`, `/includes/security.php`, `/includes/bootstrap.php`, `/tests/check_database.php` and `/database/schema.sql` all answered 403; the Apache logs contained no database password |
+| Test 8: Steps 1 and 2 still work | `php tests/check_database.php`: every line `[PASS]`, exit code 0, on both servers. The five existing PHP/SQL files and the four documents were byte-identical to the supplied copies before the documents were edited. `schema.sql` imported into a fresh database (5 tables). The check script answered 403 with an empty body when requested over HTTP |
+| phpMyAdmin query documented in the README | The `SELECT ... WHERE visitor_code_hash = SHA2(REPLACE('<code>','-',''),256)` query returned the registered visitor (hash length 64); the same query with a wrong code returned no row. **Run on MySQL 8.0.46 only.** |
+
+**Not verified** (by anyone):
+
+* Anything on **Windows, XAMPP or phpMyAdmin**, including XAMPP's bundled MariaDB and its PHP version and the Windows steps written in the README.
+* Behaviour in a **real web browser** (the Back button, how cookies are handled, how the pages look). The README's browser tests (test 5 with Back, test 7 option B) have not been performed by anyone.
+* **PHP 8.2** (only 8.3.6 was available; the code uses nothing newer by reading, not by running).
+* A real **HTTPS** connection. The `SHA2()` query on **MariaDB** (it exists there, but it was not run). Windows' session locking (the double-click protection was tested with PHP's default file sessions on Linux only). Custom session handlers. Load.
+* The `.htaccess` files and `.gitignore` (not supplied).
+
+**Tests performed by the student:** none recorded yet.
+
+### Student review (to be completed by the student)
+
+* What I checked and understood:
+* What I changed, and why:
+* Decisions I accepted or rejected (including the seven above and `ASSUMPTIONS.md`, G1 to G16; especially G1, SHA-256 or HMAC):
+* Tests I ran myself, where (for example `register.php` on XAMPP and phpMyAdmin), and the results:
+* Things I could not explain yet:

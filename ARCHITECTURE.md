@@ -1,7 +1,7 @@
 # Architecture
 
-Status: **Steps 1 and 2.** The database schema, the documentation, the configuration loader and the
-database connection exist. Sections that say "planned" describe code that has not been built yet.
+Status: **Steps 1 to 3.** The database schema, the documentation, the configuration loader, the
+database connection and visitor registration exist. Sections that say "planned" describe code that has not been built yet.
 
 ---
 
@@ -40,8 +40,16 @@ Step 1 planned `config.php` and `database.php` inside `includes/`; they were pla
 instead, as the Step 2 brief requires. The separation between configuration, connection and start-up is
 unchanged.
 
-Planned module names (all lower case), not built yet: `visitors.php`, `consents.php`, `photos.php`,
-`storage.php`, `slideshow.php`, `auth.php`. Names may change; the separation will not.
+**Built in Step 3** (visitor registration):
+
+| File | Layer | Responsibility |
+|------|-------|----------------|
+| `register.php` | Presentation | The registration page: reads the form, calls the functions below, writes the HTML. It contains no SQL. |
+| `includes/security.php` | Application logic | Secure session start, CSRF token, security headers, `html_escape()`. Used by every page that shows a form. |
+| `includes/visitors.php` | Application logic and data | Name validation, code generation, code hashing, and `visitor_register()`, which runs the one prepared `INSERT` and the collision retry. |
+
+Planned module names (all lower case), not built yet: `consents.php`, `photos.php`, `storage.php`,
+`slideshow.php`, `auth.php`. Names may change; the separation will not.
 
 **How the connection works.** `db_connection()` opens one PDO connection the first time it is called and
 returns the same object afterwards, so a page that never needs the database never connects and no
@@ -88,6 +96,7 @@ one kept outside the web folder.
 
 In Step 2 the loader reads every variable above **except** `VISITOR_CODE_PEPPER`,
 `UPLOAD_ALLOWED_MIME_TYPES` and `SLIDESHOW_DEFAULT_DURATION_SECONDS`, which later steps will add.
+Step 3 did not add any of them (see section 5 for why `VISITOR_CODE_PEPPER` is still unused).
 Values are checked before use (for example the database host, name and port are restricted to safe
 characters because they are placed in the connection string), and the storage path must be an absolute
 path for the operating system in use.
@@ -117,17 +126,54 @@ and sends it only if the photograph is allowed to be shown (see section 9).
 ## 5. Visitor identification approach
 
 * The system **generates a random visitor code** and shows it to the visitor once.
-* Only a **keyed hash** is stored: `HMAC-SHA-256(code, VISITOR_CODE_PEPPER)` as 64 hex characters in
-  `visitors.visitor_code_hash`, which has a `UNIQUE` index.
+* Only a **hash** is stored, as 64 hex characters in `visitors.visitor_code_hash`, which has a `UNIQUE` index.
+  The Step 1 design was a **keyed** hash, `HMAC-SHA-256(code, VISITOR_CODE_PEPPER)`. **What Step 3 actually
+  does is a plain `SHA-256(code)`**, because the Step 3 brief asks for SHA-256 and the configuration loader does not
+  read `VISITOR_CODE_PEPPER` yet (see "Built in Step 3" below and `ASSUMPTIONS.md`, G1).
 * The plaintext code is never stored in the database, logs or files.
 * A returning visitor types the code; the application computes the same hash and does one indexed
   lookup. This stays fast with many visitors, which a per-row salted hash (bcrypt) would not.
-* Because the hash is keyed with a secret that is not in the database, a database leak alone does not
-  allow codes to be recovered by guessing.
+* Planned (keyed) design: because the hash is keyed with a secret that is not in the database, a database
+  leak alone does not allow codes to be recovered by guessing. With the plain SHA-256 used in Step 3 that
+  protection comes from the length of the code instead: a code has 160 random bits, so a stolen hash
+  cannot realistically be reversed by guessing, but it also has no secret behind it.
 * Visitors give only a name: no phone number and no email address.
 
 Limitation: anyone who obtains a code can act as that visitor. Rate limiting of code attempts is a
 future step (see section 12).
+
+### Built in Step 3: visitor registration
+
+```
+GET  register.php                  -> form (hidden CSRF token from the session)
+POST register.php  action=register -> 1 check CSRF token         (fail: 403, nothing stored)
+                                      2 validate the name        (fail: 422, form shown again)
+                                      3 make a code (random_bytes), hash it (SHA-256)
+                                      4 INSERT (name, hash) with a prepared statement;
+                                        duplicate hash (error 1062) -> new code, retry, max 5 times
+                                      5 keep name + code in $_SESSION, use up the CSRF token
+                                      6 303 redirect to register.php?registered=1   (Post-Redirect-Get)
+GET  register.php?registered=1     -> shows the code from the session (same code on every refresh)
+POST register.php  action=clear    -> forgets the result ("register another visitor")
+```
+
+* **Code:** 20 bytes from `random_bytes()` (160 bits), Base32 letters `A-Z2-7`, 8 groups of 4 with hyphens (39 characters).
+* **Hash input:** the code in capital letters without hyphens and spaces (`visitor_code_normalize()`), so a code typed later
+  in lower case or without hyphens gives the same hash. The returning-visitor step must hash with `visitor_code_hash()` from `includes/visitors.php`.
+* **Collision handling:** the unique key `uq_visitors_code_hash` is the check. A failed insert stores nothing, so a retry cannot leave a half-registered visitor.
+  Looking the hash up first and inserting afterwards would not be safe when two visitors register at once.
+* **Where the plaintext code exists:** on the visitor's screen, and in the server-side PHP session for up to 15 minutes so that the result page can be refreshed.
+  It is never in a database column, a log message or an exception message.
+* **No duplicate on refresh or double click:** the result page is a `GET`; the `POST` is answered with a redirect; the CSRF token is single-use, and PHP's default
+  file session handler lets only one request per session run at a time, so a second simultaneous `POST` meets the used-up token. This relies on the default
+  session handler; a custom handler without locking would need its own protection.
+* **The session id is not renewed** after registering. Registering gives the visitor no extra rights, and renewing the id deleted the session
+  file that a simultaneous second request was waiting for, which let a double click register twice (found in testing; see `AI_LOG.md`). Session-id renewal belongs
+  at administrator login, a later step.
+* **Transport and headers:** the session cookie is `HttpOnly`, `SameSite=Lax`, `Secure` over HTTPS; pages are sent with `Cache-Control: no-store` and a restrictive
+  `Content-Security-Policy` (the pages use no CSS, JavaScript or images).
+* **URLs:** the form action and the redirect are relative (`register.php`), so they work in a sub-folder (XAMPP) and at the site root (Ubuntu) without depending on `APP_URL`.
+  `APP_URL` is used only to decide the cookie's `Secure` flag.
 
 ---
 
@@ -261,7 +307,7 @@ has its own transaction.
 
 ## 10. How returning visitors are handled (planned)
 
-1. The visitor enters their code; the application hashes it and looks up `visitors`.
+1. The visitor enters their code; the application hashes it (with `visitor_code_hash()`, the same function registration uses) and looks up `visitors`. *(Not built yet.)*
 2. If found, the visitor's earlier photographs stay in place; new uploads are added alongside them.
 3. Every new upload session asks for consent again, even if the visitor consented earlier to the same
    consent version. A new `consents` row is created for that session before any new photograph is accepted.

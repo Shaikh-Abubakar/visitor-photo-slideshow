@@ -1,12 +1,19 @@
+# Quick start: Windows XAMPP
+
+For the corrected folder layout and complete XAMPP database setup, follow [SETUP_XAMPP.md](SETUP_XAMPP.md). The ZIP includes a local `.env` configured for the common XAMPP default (`root` with an empty MySQL password). If your MySQL root account has a password, update `DB_PASSWORD` in `.env`.
+
+---
+
 # Visitor Photo Slideshow System
 
 A PHP and MySQL web application, built as College Assignment 1, that lets visitors upload photographs,
 record their consent, and have their photographs shown on a public slideshow.
 
-> **Current status: Step 2 of a larger project (PHP configuration and database connection).**
-> The folder structure, database schema, documentation, configuration loader and database connection
-> exist. **No application pages exist yet** (no registration, upload, gallery, slideshow or admin
-> screens). Those are built in later steps.
+> **Current status: Step 3 of a larger project (visitor registration).**
+> The folder structure, database schema, documentation, configuration loader, database connection and
+> the **visitor registration page** (`register.php`) exist. A first-time visitor can register and receive a
+> visitor code. **Not built yet:** returning-visitor identification, consent, upload, gallery, slideshow and
+> admin screens. Those are built in later steps.
 
 ## Project description
 
@@ -42,7 +49,7 @@ the photographs of that session refer to it. Administrators manage visitors, pho
 |--------|---------|------|
 | Foundation and database | Structure, schema, documentation | **1 (done)** |
 | Configuration and database connection | Read `.env`, connect with PDO | **2 (done)** |
-| Visitor registration and code | Create visitor, generate and hash code | planned |
+| Visitor registration and code | Create visitor, generate and hash code | **3 (done)** |
 | Consent | Record a consent record (with the consent text version) for every upload session | planned |
 | Photo upload and storage | Validate, store privately, save metadata | planned |
 | Visitor gallery | Returning visitors see their photographs (paginated) | planned |
@@ -57,7 +64,9 @@ visitor-photo-slideshow/
 │   ├── config.php     configuration loader (reads .env and environment variables)
 │   └── database.php   reusable PDO connection function
 ├── includes/
-│   └── bootstrap.php  common start-up file that every page loads
+│   ├── bootstrap.php  common start-up file that every page loads
+│   ├── security.php   secure session, CSRF token, security headers, output escaping (Step 3)
+│   └── visitors.php   name validation, visitor-code generation and hashing, insert (Step 3)
 ├── admin/             administrator pages (empty for now)
 ├── database/
 │   └── schema.sql     database tables
@@ -65,6 +74,7 @@ visitor-photo-slideshow/
 │   └── uploads/       private photograph storage (contents are never committed)
 ├── tests/
 │   └── check_database.php   command-line check of the configuration and database
+├── register.php       visitor registration page (Step 3)
 ├── .env.example       configuration template (placeholders only)
 ├── .gitignore
 ├── README.md
@@ -278,8 +288,9 @@ with status `0` when everything passes and `1` otherwise. A `[WARN]` about the u
       account → tick **Modify** → *OK*.
    3. Do **not** grant *Everyone* full control, and do not open up the whole project folder.
 9. **Open the application.** Browse to <http://localhost/visitor-photo-slideshow/>.
-   In Step 1 there is no start page yet, so you will see a folder listing or an error; that is expected.
-   The app's pages arrive in later steps.
+   There is no start page (`index.php`) yet, so the bare folder address shows a folder listing or an error;
+   that is expected. The one page that exists is the registration page, `register.php` (Step 3, see
+   *Visitor registration* below).
 
 ### Windows: configure and test the database connection (Step 2)
 
@@ -463,8 +474,9 @@ connection* below).
     sudo systemctl restart apache2
     ```
 
-    Browse to <http://localhost/> (or your `ServerName`). In Step 1 there is no start page yet, so
-    **403 Forbidden** (directory listing is off) is expected. Pages arrive in later steps.
+    Browse to <http://localhost/> (or your `ServerName`). There is no start page (`index.php`) yet, so
+    **403 Forbidden** (directory listing is off) is expected. The one page that exists is
+    <http://localhost/register.php> (Step 3, see *Visitor registration* below).
 
 ### Ubuntu: configure and test the database connection (Step 2)
 
@@ -518,6 +530,136 @@ Ubuntu-specific problems:
 
 ---
 
+## Visitor registration (Step 3)
+
+A first-time visitor opens `register.php`, types a name and presses **Register**. The system creates a
+unique **visitor code**, stores only a one-way hash of it, and shows the code once so the visitor can save it
+for future visits. (Recognising a returning visitor by that code is a later step and is **not built yet**.)
+
+| Platform | Address of the page |
+|----------|---------------------|
+| Windows (XAMPP) | <http://localhost/visitor-photo-slideshow/register.php> |
+| Ubuntu (virtual host from this README) | <http://localhost/register.php> |
+
+### Files added in Step 3
+
+| File | Purpose |
+|------|---------|
+| `register.php` | The page: form, result, request handling. All HTML is written by PHP; there is no CSS and no JavaScript. |
+| `includes/security.php` | Secure session start, CSRF token, security headers, `html_escape()` (a wrapper around `htmlspecialchars()`). |
+| `includes/visitors.php` | Name validation, visitor-code generation, hashing, and the database insert with collision retry. |
+
+`config/`, `includes/bootstrap.php`, `tests/check_database.php` and `database/schema.sql` are **unchanged**. The
+`visitors` table already had everything needed (`id`, `name`, `visitor_code_hash` with a `UNIQUE` key, `created_at`),
+so there is no schema change and nothing to re-import.
+
+### How registration works
+
+1. `GET register.php` shows the form. It contains a hidden **CSRF token** stored in the visitor's PHP session.
+2. On submit (`POST`) the server checks the CSRF token first. A missing or wrong token is rejected with HTTP 403 and nothing is read or stored.
+3. The name is validated **on the server** (see the rules below). Problems are listed above the form and the typed name stays in the field (HTTP 422).
+4. The code is made with PHP `random_bytes()`: 20 random bytes (160 bits), written as 32 letters and digits (`A-Z`, `2-7`) in 8 groups of 4, for example `K7QD-2MXA-...` (39 characters with the hyphens).
+5. The **SHA-256 hash** of the code (64 hex characters; hyphens and letter case are ignored) is inserted into `visitors.visitor_code_hash` with a **prepared statement**. The code itself is never written to the database.
+6. If the database reports that the hash already exists (the column is `UNIQUE`), nothing is stored, a **new code** is made and the insert is retried, up to 5 times. The database does the check, so it is also safe when two visitors register at the same moment.
+7. The code and name are kept in the visitor's **session**, the CSRF token is used up, and the browser is redirected (HTTP 303) to `register.php?registered=1` (**Post-Redirect-Get**).
+8. The result page shows the success message and the code from the session. Refreshing it only repeats a `GET`: it shows the **same** code and creates **no** new record.
+9. The result stays available for **15 minutes**, then it is removed. The button **"I have saved my code - register another visitor"** removes it at once and returns to the form.
+
+The database holds only the hash, so the code cannot be shown again later. During those 15 minutes the code
+also exists in the server-side session file (PHP's session storage, not the database); that is how the result page can survive a refresh.
+
+**Name rules** (`visitor_name_validate()`): text, valid UTF-8; extra spaces are removed; 1 to 100 characters;
+must start with a letter; only letters (any alphabet, for example `रवि कुमार` or `José`), spaces, hyphens, apostrophes and full stops; at least 2 letters.
+Digits, symbols and HTML are refused. Two visitors may have the same name.
+
+**Security measures:** session cookie that is `HttpOnly`, `SameSite=Lax` and `Secure` when the site is served over HTTPS (or `APP_URL` starts with `https://`), strict session mode, no session id in URLs;
+CSRF token compared with `hash_equals()` and valid for one successful action; every value printed in a page goes through `htmlspecialchars()`; prepared statements only;
+`Content-Security-Policy`, `X-Frame-Options`, `X-Content-Type-Options`, `Referrer-Policy` and `Cache-Control: no-store` headers; database and configuration errors are written to the server log and the visitor sees only
+"Registration could not be completed because of a technical problem. Please try again later." The hash, the database credentials and PHP error text are never shown.
+
+### Run and test on Windows (XAMPP)
+
+1. Start **Apache** and **MySQL** in the XAMPP Control Panel. Make sure Steps 1 and 2 are done (database imported, `.env` filled in) and that the database check still passes:
+
+   ```bat
+   cd C:\xampp\htdocs\visitor-photo-slideshow
+   C:\xampp\php\php.exe tests\check_database.php
+   ```
+
+2. Copy the new files into the project: `register.php` into the project folder, and `security.php` and `visitors.php` into its `includes` folder. Replace `README.md`, `ARCHITECTURE.md`, `ASSUMPTIONS.md` and `AI_LOG.md` with the updated ones.
+3. Open <http://localhost/visitor-photo-slideshow/register.php>.
+4. Run the tests in the table below.
+
+### Run and test on Ubuntu
+
+1. Copy the same files into `/var/www/visitor-photo-slideshow` (`register.php` in the folder, the other two in `includes/`) and repeat the permission commands from *Ubuntu installation*, step 9 (new files must be readable by `www-data`).
+2. Run the database check: `php tests/check_database.php`.
+3. Open <http://localhost/register.php> and run the tests below. The curl commands in tests 7 work in a terminal as they are.
+
+### Tests to run
+
+The expected result is the same on both platforms. The browser pages have no `required` attribute on purpose, so you can see the **server's** validation.
+
+| # | Test | Expected result |
+|---|------|-----------------|
+| 1 | Type a valid name such as `Asha Patel` and press **Register**. | The address changes to `register.php?registered=1` and a page says **Registration successful**. |
+| 2 | In phpMyAdmin open `visitor_photo_slideshow` > `visitors` > **Browse** (see below). | One new row with your name, a 64-character `visitor_code_hash` and a `created_at` time. |
+| 3 | Check that the table holds the hash and not the code (the SQL below). | No column shows your code. The `SHA2` query returns your row; a query with a wrong code returns nothing. |
+| 4 | Look at the result page. | The code (8 groups of 4, for example `K7QD-2MXA-...`) and the sentence telling you to save it for future visits. No hash is shown. |
+| 5 | Press **F5** several times on the result page. Then press the browser's **Back** button and submit the old form again. | The same code every time, and the row count in phpMyAdmin stays the same. (After Back and submit you are taken back to the same result.) |
+| 6 | Register with an empty name, then with `123`, then with `<b>x</b>`. | The form appears again with a message such as "Please enter your name." No new row. |
+| 7 | Send a wrong CSRF token (below). | HTTP **403**, the message "The form could not be verified", and no new row. |
+| 8 | Run the Step 2 check (`tests\check_database.php`). | Every line `[PASS]` and `RESULT: PASS`. |
+
+**Test 7, option A (any system with curl; Windows 10 and 11 include `curl.exe`).** The command sends a form without a valid token:
+
+```
+curl -i -X POST -d "csrf_token=wrong&action=register&name=Test+User" http://localhost/visitor-photo-slideshow/register.php
+```
+
+(On Ubuntu use `http://localhost/register.php`; on Windows type `curl.exe`.) The first line of the answer must be `HTTP/1.1 403 Forbidden`.
+
+**Test 7, option B (browser only).** Open the form, open the browser's developer tools (F12), find the cookie `vps_session` (*Application* or *Storage* tab > *Cookies*) and delete it. Without reloading the page, type a name and press **Register**. You must see "The form could not be verified" and no new row appears.
+
+### Verify the visitor record in phpMyAdmin
+
+1. Open <http://localhost/phpmyadmin>, click **visitor_photo_slideshow** in the left list, then the **visitors** table, then **Browse**.
+2. The newest row shows `id`, `name`, `visitor_code_hash` (64 characters of `0-9a-f`) and `created_at` (UTC).
+3. Open the **SQL** tab and run this to see the length of the hash and the newest rows:
+
+   ```sql
+   SELECT id, name, visitor_code_hash, CHAR_LENGTH(visitor_code_hash) AS hash_length, created_at
+   FROM visitors ORDER BY id DESC LIMIT 5;
+   ```
+
+4. To prove that the stored value is the hash of the code you were shown, paste your code between the quotes. It returns your row only if the code is correct (it can be typed with or without hyphens):
+
+   ```sql
+   SELECT id, name FROM visitors
+   WHERE visitor_code_hash = SHA2(REPLACE('PASTE-YOUR-CODE-HERE', '-', ''), 256);
+   ```
+
+5. To remove your test rows: tick them in **Browse** and press **Delete**. (Do this only for test data. Once consents and photographs exist, the foreign keys will refuse to delete a visitor who still has them.)
+
+### Common problems (Step 3)
+
+| Problem | Usual cause and fix |
+|---------|---------------------|
+| Every submit shows "The form could not be verified" | The browser does not keep the session cookie (cookies blocked), or the PHP session folder is not writable. Windows: check `session.save_path` in `php.ini` (XAMPP normally uses `C:\xampp\tmp`). Ubuntu: `/var/lib/php/sessions` must be writable by `www-data`. |
+| White page or "Something went wrong. Please try again later." | Read the error log (XAMPP: `C:\xampp\apache\logs\error.log`; Ubuntu: `/var/log/apache2/error.log`). Typical causes: `.env` missing or wrong, or the PHP extension `mbstring` or `pdo_mysql` is not enabled. |
+| "Registration could not be completed because of a technical problem" | The page works but the database refused the insert. Run `php tests/check_database.php`; check the error log. |
+| The code is gone after a while | By design: the result is removed from the session after 15 minutes. |
+| Page shows the form and "The result of the registration is no longer available" | The 15 minutes passed, or the session was lost. If the code was not saved, register again (the old row stays in the table; it cannot be recovered). |
+
+### Not built in Step 3
+
+Returning-visitor identification, consent, photo upload, gallery, slideshow and the administrator pages. `VISITOR_CODE_PEPPER` in `.env.example` is **not used yet**:
+Step 3 stores a plain SHA-256 hash, as the Step 3 brief asks (see `ASSUMPTIONS.md`, G1).
+
+*Step 3 was tested in the AI's sandbox on Ubuntu 24.04 with PHP 8.3.6, Apache 2.4.58 (mod_php), the PHP built-in web server, and both MariaDB 10.11.14 and MySQL 8.0.46. It has not been tested on Windows, XAMPP, phpMyAdmin or in a real web browser; see `AI_LOG.md`.*
+
+---
+
 ## Windows and Ubuntu: what differs
 
 Both use the **same PHP source code and the same `schema.sql`**.
@@ -550,9 +692,11 @@ In application code, paths are built with `__DIR__` and `DIRECTORY_SEPARATOR`, a
 * **Photographs.** Copy the contents of the upload folder (`storage/uploads` or your
   `UPLOAD_STORAGE_PATH`) together with the database export, because the database stores only file names.
 
-## Limitations (Steps 1 and 2)
+## Limitations (Steps 1 to 3)
 
-Nothing is built beyond the schema, the documentation, the configuration loader and the database connection.
-Step 2 has not been tested on Windows or XAMPP, or with MariaDB. The design is meant to grow but has not been
-load-tested; see `ARCHITECTURE.md` (section 12) for limits and future improvements and
+Built so far: the schema, the documentation, the configuration loader, the database connection and visitor registration.
+Steps 2 and 3 have not been tested on Windows or XAMPP, in phpMyAdmin or in a real web browser (the AI tested them with a
+scripted HTTP client; see `AI_LOG.md`). Registration has no rate limiting, so someone could create many visitor records by
+repeating the form, and a lost visitor code cannot be recovered. Visitor names are stored as typed. The design is meant to
+grow but has not been load-tested; see `ARCHITECTURE.md` (section 12) for limits and future improvements and
 `ASSUMPTIONS.md` for open questions.
