@@ -197,3 +197,15 @@ The limits and formats come from A3-A5 (10 photographs per submission, 5 MB each
 | J9 | Step 7 has not been database/browser tested in this environment because PHP `pdo_mysql` and a running MySQL/MariaDB service were unavailable. | Do not claim tests that were not executed. | Run the documented checks on XAMPP/Ubuntu. |
 | J10 | The stylesheet fits the original photo within the actual browser viewport using `max-width: 100vw`, `max-height: 100vh`, `width: auto`, `height: auto` and `object-fit: contain`. It does not upscale small originals. | Fixed PHP pixel attributes did not respond to the real viewport and the earlier approach could enlarge small images, making them look soft. The photo should be completely visible without cropping; source resolution determines sharpness. | Yes, in `slideshow.css`. |
 | J11 | Slideshow eligibility queries explicitly join `visitors` as well as `photos` and `consents`. | A public screen does not need to register, but a displayed photo must belong to a registered visitor; the foreign key also enforces this in a correctly constrained database. The explicit join makes the rule visible in the selection query. | Yes. |
+
+
+## K. Step 8 administrator dashboard decisions
+
+| # | Decision | Reason |
+|---|---|---|
+| K1 | Add `photos.approval_status` with `pending`, `approved`, `rejected`; new uploads default to `pending`. | Existing `active`/`hidden` status cannot represent administrator approval separately from visitor consent. |
+| K2 | Public slideshow requires `status='active'`, `approval_status='approved'`, and a matching visitor consent with version `1.0`. | Consent and moderation are independent gates; fail closed. |
+| K3 | Existing Step 7 photos are migrated to `pending`, not automatically approved. | Avoid making previously uploaded photos public without an administrator review. |
+| K4 | First administrator is created only by CLI while `admins` is empty; no default credentials or public setup page. | Avoid an unauthenticated public account-claim endpoint. |
+| K5 | Admin photo list is capped at latest 200; visitor listing uses 20-row server-side pages. | Prevent unbounded result rendering; photo-list pagination is a future improvement if needed. |
+| K6 | Hiding a photo sets status hidden and approval rejected; the original consent record is retained. | Moderation must not rewrite visitor consent history. |

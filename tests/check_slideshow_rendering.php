@@ -17,7 +17,7 @@ $checks = [
     'page enables same-origin CSS and images only for the slideshow' => str_contains($page, 'send_security_headers(true, true);'),
     'photo selection requires a matching registered visitor' => substr_count($helpers, 'INNER JOIN visitors v ON v.id = p.visitor_id') >= 2,
     'photo selection requires the matching visitor consent' => substr_count($helpers, 'INNER JOIN consents c ON c.id = p.consent_id AND c.visitor_id = p.visitor_id') >= 2,
-    'photo selection requires active status and consent version' => str_contains($helpers, 'p.status = :status AND c.consent_version = :version'),
+    'photo selection requires active status, administrator approval and consent version' => str_contains($helpers, 'p.status = :status AND p.approval_status = :approval AND c.consent_version = :version'),
     'JavaScript is not added to the slideshow page' => !preg_match('/<script\b|javascript:/i', $page),
 ];
 

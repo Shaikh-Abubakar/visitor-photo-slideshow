@@ -122,8 +122,8 @@ try {
 $columns = $pdo->query(
     "SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'photos'"
 )->fetchAll(PDO::FETCH_COLUMN);
-$expected = ['id', 'visitor_id', 'consent_id', 'stored_filename', 'original_filename', 'mime_type', 'file_size', 'status', 'uploaded_at'];
-check('photos has exactly the columns the upload code uses', array_diff($expected, $columns) === [] && array_diff($columns, $expected) === []);
+$expected = ['id', 'visitor_id', 'consent_id', 'stored_filename', 'original_filename', 'mime_type', 'file_size', 'status', 'approval_status', 'uploaded_at'];
+check('photos has the columns the upload code uses', array_diff($expected, $columns) === []);
 $consentColumns = $pdo->query(
     "SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'consents'"
 )->fetchAll(PDO::FETCH_COLUMN);

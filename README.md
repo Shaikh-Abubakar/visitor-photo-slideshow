@@ -9,7 +9,7 @@ For the corrected folder layout and complete XAMPP database setup, follow [SETUP
 A PHP and MySQL web application, built as College Assignment 1, that lets visitors upload photographs,
 record their consent, and have their photographs shown on a public slideshow.
 
-> **Current status: Step 7 implemented (automatic public photo slideshow).**
+> **Current status: Step 8 implemented in code (administrator dashboard); database/browser integration tests remain to be run.**
 > The folder structure, database schema, documentation, configuration loader, database connection, visitor registration
 > (`register.php`, Step 3), returning visitor identification (`identify.php`, Step 4), the photo upload page
 > (`upload.php`, Step 5) and the **visitor gallery** (`gallery.php` with the private image endpoint `photo.php`, Step 6) exist.
@@ -1262,3 +1262,42 @@ Run the static slideshow rendering/eligibility check from the project folder wit
 For this correction, `php -l` reported no syntax errors in all 23 PHP files, and `php tests/check_slideshow_rendering.php` passed all 11 static rendering/eligibility checks. `getimagesize()` was also run against the nine private PNG files bundled in the ZIP; their source dimensions range from 191×178 to 337×226 pixels. A MySQL/MariaDB service and real browser/XAMPP session were not available in this environment, so database-backed selection, consent filtering against live rows, automatic browser progression, and visual TV rendering were **not executed**. The CSS behavior must still be visually confirmed in the target browser/display. Do not mark database, browser, cycling, missing-file or Steps 1–6 regression tests as passed until you execute them against your configured database and browser. Earlier Step 1–6 test claims above are historical records from the supplied project documentation, not tests rerun during this correction.
 
 Suggested manual checks on XAMPP: create/upload with the existing public-display consent; confirm the photo appears; set its status to `hidden` and confirm it disappears after a reload; restore it; remove/rename its physical file and confirm it is skipped; hide all eligible photos and confirm the empty message; restore multiple eligible photos and watch them cycle. Test the gallery and owner-only `photo.php` separately after each change.
+
+
+## Step 8: Administrator dashboard
+
+The administrator area is under `admin/`. Open `admin/login.php`; after login the dashboard shows database-backed counts, visitor search/pagination, and photo review. All changing actions use POST and the session CSRF token. Admin previews are served only through the authenticated `admin/photo.php` endpoint; storage paths are not output.
+
+### One-time administrator creation
+
+There are no seeded/default credentials and no public web setup page. Run the following from the project directory after importing the updated schema and configuring `.env`:
+
+- Windows XAMPP: `C:\xampp\php\php.exe admin\create_admin.php`
+- Ubuntu: `php admin/create_admin.php`
+
+Enter a username and a password of at least 12 characters at the terminal. Terminal input for the password is visible; avoid running this where others can see the screen. The script runs only when the `admins` table is empty and refuses to create another initial account.
+
+### Step 8 database migration
+
+For an existing Step 7 database, run this once in phpMyAdmin or the MySQL/MariaDB client:
+
+```sql
+ALTER TABLE photos
+    ADD COLUMN approval_status VARCHAR(20) NOT NULL DEFAULT 'pending' AFTER status;
+UPDATE photos SET approval_status = 'pending';
+```
+
+The `DEFAULT 'pending'` ensures existing and newly uploaded photos are not public until an administrator reviews them. The full `database/schema.sql` also includes this column and a check constraint for new installations. Do not skip the migration on an existing Step 7 database. Uploads retain their visitor consent record but start pending. Public slideshow selection and serving both require `status='active'`, `approval_status='approved'`, and consent version `1.0`. Approval never creates consent. Hiding sets `status='hidden'` and `approval_status='rejected'`.
+
+Photo review currently displays the latest 200 records; visitor listing is paginated at 20 records per page. No visitor code or authentication hash is selected for display.
+
+**Verification status for Step 8:** PHP syntax checks were run in the provided build environment. A live database, browser session, XAMPP, Ubuntu Apache, and end-to-end regression tests were not available here; do not treat those tests as passed. Run the checklist below on the target installation.
+
+1. Create the first admin using the CLI command; repeat and confirm it refuses.
+2. Confirm valid login succeeds, invalid login fails, direct dashboard access redirects, and POST logout ends the session.
+3. Confirm CSRF-less photo actions and logout are rejected.
+4. Check dashboard counts against SQL counts; search visitors and navigate beyond page 1.
+5. Upload a photo with consent: it must be pending and absent from the public slideshow. Approve it: it should display. Hide it: it must disappear.
+6. Confirm a photo with no matching consent or a consent version other than `1.0` cannot be approved.
+7. Re-test visitor registration, identification, upload, owner gallery and slideshow.
+8. Repeat on Windows XAMPP and Ubuntu Apache/PHP/MySQL or MariaDB.

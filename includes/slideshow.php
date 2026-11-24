@@ -28,11 +28,12 @@ function slideshow_find_next_photo(PDO $pdo, int $afterId): ?array
         ' FROM photos p '
         . 'INNER JOIN visitors v ON v.id = p.visitor_id '
         . 'INNER JOIN consents c ON c.id = p.consent_id AND c.visitor_id = p.visitor_id '
-        . ' WHERE p.status = :status AND c.consent_version = :version';
+        . ' WHERE p.status = :status AND p.approval_status = :approval AND c.consent_version = :version';
 
     $countStatement = $pdo->prepare('SELECT COUNT(*)' . $registeredEligibleSql);
     $countStatement->execute([
         ':status' => GALLERY_VISIBLE_STATUS,
+        ':approval' => 'approved',
         ':version' => SLIDESHOW_PUBLIC_CONSENT_VERSION,
     ]);
     $remaining = (int) $countStatement->fetchColumn();
@@ -53,6 +54,7 @@ function slideshow_find_next_photo(PDO $pdo, int $afterId): ?array
         if ($afterId > 0) {
             $nextStatement->execute([
                 ':status' => GALLERY_VISIBLE_STATUS,
+                ':approval' => 'approved',
                 ':version' => SLIDESHOW_PUBLIC_CONSENT_VERSION,
                 ':after_id' => $afterId,
             ]);
@@ -63,6 +65,7 @@ function slideshow_find_next_photo(PDO $pdo, int $afterId): ?array
         if (!is_array($row)) {
             $firstStatement->execute([
                 ':status' => GALLERY_VISIBLE_STATUS,
+                ':approval' => 'approved',
                 ':version' => SLIDESHOW_PUBLIC_CONSENT_VERSION,
             ]);
             $row = $firstStatement->fetch();
@@ -100,11 +103,12 @@ function slideshow_find_photo_for_serving(PDO $pdo, int $photoId): ?array
         'SELECT p.id, p.stored_filename, p.mime_type FROM photos p '
         . 'INNER JOIN visitors v ON v.id = p.visitor_id '
         . 'INNER JOIN consents c ON c.id = p.consent_id AND c.visitor_id = p.visitor_id '
-        . 'WHERE p.id = :id AND p.status = :status AND c.consent_version = :version LIMIT 1'
+        . 'WHERE p.id = :id AND p.status = :status AND p.approval_status = :approval AND c.consent_version = :version LIMIT 1'
     );
     $statement->execute([
         ':id' => $photoId,
         ':status' => GALLERY_VISIBLE_STATUS,
+        ':approval' => 'approved',
         ':version' => SLIDESHOW_PUBLIC_CONSENT_VERSION,
     ]);
     $row = $statement->fetch();

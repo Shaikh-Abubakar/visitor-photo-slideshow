@@ -32,10 +32,9 @@ if (!defined('APP_ROOT')) {
 const UPLOAD_CONSENT_VERSION = '1.0';
 
 /**
- * Initial value of photos.status. The schema allows only 'active' (eligible for the slideshow) and
- * 'hidden'. A photograph is stored only together with a consent record that the visitor gave
- * explicitly for this upload, and the project has no approval step (ASSUMPTIONS.md, B3), so the
- * photograph starts as 'active'. Nothing shows photographs publicly yet (no slideshow exists).
+ * Initial value of photos.status. The independent approval_status starts as 'pending' for every
+ * upload; an administrator must approve it before the public slideshow can display it. The visitor's
+ * consent is stored separately and is never treated as administrator approval.
  */
 const UPLOAD_INITIAL_STATUS = 'active';
 
@@ -422,13 +421,13 @@ function upload_process(PDO $pdo, int $visitorId, array $files, string $storageD
         $consentId = (int) $pdo->lastInsertId();
 
         $insert = $pdo->prepare(
-            'INSERT INTO photos (visitor_id, consent_id, stored_filename, original_filename, mime_type, file_size, status) '
-            . 'VALUES (?, ?, ?, ?, ?, ?, ?)'
+            'INSERT INTO photos (visitor_id, consent_id, stored_filename, original_filename, mime_type, file_size, status, approval_status) '
+            . 'VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
         );
         foreach ($accepted as $file) {
             $insert->execute([
                 $visitorId, $consentId, $file['stored_name'], $file['original_name'],
-                $file['mime'], $file['size'], UPLOAD_INITIAL_STATUS,
+                $file['mime'], $file['size'], UPLOAD_INITIAL_STATUS, 'pending',
             ]);
         }
 

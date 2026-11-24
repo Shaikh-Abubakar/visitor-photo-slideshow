@@ -398,3 +398,10 @@ It has not been load-tested.
 | The gallery shows full-size files scaled by the browser (Step 6) | Generate thumbnails (needs an image library) |
 | A visitor cannot see photographs with status `hidden`, and the schema cannot say why a photograph is hidden (Step 6) | Add a field or status that separates "removed by an administrator" from "hidden by the visitor" |
 | The owner gallery does not compare `consent_version`; public slideshow currently accepts only version `1.0` (Steps 6–7) | Review and explicitly migrate the public-consent policy when consent wording changes |
+
+
+## Step 8: administrator area
+
+`admin/auth.php` centralizes administrator session enforcement, CSRF validation and consent checks. `admin/login.php` verifies `password_hash()` values using `password_verify()` and regenerates the session ID. `admin/create_admin.php` is CLI-only and permits initial setup only while `admins` is empty. Dashboard, visitor and photo pages use PDO; visitor rows are paginated; private previews use an authenticated streaming endpoint.
+
+Photo visibility now has two independent controls: `consents.consent_version='1.0'` records visitor permission for public display; `photos.approval_status='approved'` records administrator approval; `photos.status='active'` means not hidden. Public selection and public image serving enforce all three conditions. New uploads start `pending`.

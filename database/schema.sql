@@ -87,6 +87,7 @@ CREATE TABLE photos (
     mime_type          VARCHAR(50)     NOT NULL,
     file_size          INT UNSIGNED    NOT NULL,
     status             VARCHAR(20)     NOT NULL DEFAULT 'active',
+    approval_status    VARCHAR(20)     NOT NULL DEFAULT 'pending',
     uploaded_at        DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (id),
     UNIQUE KEY uq_photos_stored_filename (stored_filename),
@@ -94,6 +95,7 @@ CREATE TABLE photos (
     KEY idx_photos_consent_visitor (consent_id, visitor_id),
     KEY idx_photos_status (status),
     CONSTRAINT chk_photos_status CHECK (status IN ('active', 'hidden')),
+    CONSTRAINT chk_photos_approval CHECK (approval_status IN ('pending', 'approved', 'rejected')),
     CONSTRAINT fk_photos_visitor
         FOREIGN KEY (visitor_id) REFERENCES visitors (id)
         ON DELETE RESTRICT ON UPDATE RESTRICT,

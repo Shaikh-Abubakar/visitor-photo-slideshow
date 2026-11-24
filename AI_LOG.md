@@ -603,3 +603,21 @@ The student reported that the slideshow photograph was rendering only partially 
 * PHP `getimagesize()` read all nine private PNGs included in the archive; the dimensions range from 191×178 to 337×226 pixels. This identifies a concrete reason the bundled samples become blurry when enlarged to a TV-sized display.
 * These results do not prove that an actual TV/browser renders correctly or that the student's current database contains/does not contain old records.
 * No live XAMPP/MySQL/MariaDB run, real browser screenshot, actual automatic progression test, or Step 1–6 regression run was available during this correction. The student should record their own results in the student review section after testing the extracted archive.
+
+
+## Step 8: Administrator dashboard (2026-11-24)
+
+| Item | Detail |
+|---|---|
+| Input | User supplied the Step 7 project ZIP and requested Step 8 only. |
+| Inspected | Existing schema, upload insertion, gallery visibility, public slideshow selection/serving, security/session helpers, configuration and project documentation. |
+| Finding | `photos.status` only had `active`/`hidden`; public slideshow required consent version `1.0` but had no independent administrator approval gate. `admins` existed without dashboard pages. |
+| Changes prepared | Administrator login/logout, dashboard counts, visitor search and pagination, photo review/actions, authenticated private photo preview, CLI-only first-admin creation, approval status migration, slideshow approval gate, documentation. |
+| Tests actually run | PHP syntax checks on all project PHP files; the Step 7 slideshow rendering/eligibility script passed 11/11 static checks. |
+| Not run | Database migration against a live DB, browser login/session tests, photo approval flow, CSRF integration, XAMPP, Ubuntu Apache, and Step 3-7 end-to-end regression. |
+
+### AI correction / limitation
+
+The first attempt to write the implementation through the notebook runtime failed with a filesystem permission error. No project changes were made by that failed attempt. The files were then written using the project working directory after checking write access. This is recorded as a tooling correction, not a successful application test.
+
+The delivery archive excludes the uploaded `.env` file and actual contents of `storage/uploads/`; those may contain local credentials or private visitor images. The folder and `.gitkeep` placeholder remain. Keep your own `.env` and private upload backup outside the shared archive.
