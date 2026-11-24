@@ -58,9 +58,9 @@ function bootstrap_handle_uncaught(Throwable $e): void
         // The configuration itself is broken: keep the message neutral.
     }
 
-    echo $debug
-        ? get_class($e) . ': ' . $e->getMessage()
-        : 'Something went wrong. Please try again later.';
+    // Never return exception messages to a browser: they can contain SQL, paths or configuration details.
+    // Developers can inspect the server-side PHP error log instead.
+    echo 'Something went wrong. Please try again later.';
 }
 
 if (PHP_SAPI !== 'cli') {
@@ -72,5 +72,5 @@ if (PHP_SAPI !== 'cli') {
 app_config('APP_ENV');
 
 if (PHP_SAPI !== 'cli') {
-    ini_set('display_errors', app_config('APP_DEBUG') ? '1' : '0');
+    ini_set('display_errors', '0');
 }

@@ -28,7 +28,7 @@ function slideshow_find_next_photo(PDO $pdo, int $afterId): ?array
         ' FROM photos p '
         . 'INNER JOIN visitors v ON v.id = p.visitor_id '
         . 'INNER JOIN consents c ON c.id = p.consent_id AND c.visitor_id = p.visitor_id '
-        . ' WHERE p.status = :status AND p.approval_status = :approval AND c.consent_version = :version';
+        . ' WHERE p.status = :status AND p.approval_status = :approval AND c.consent_version = :version AND c.withdrawn_at IS NULL';
 
     $countStatement = $pdo->prepare('SELECT COUNT(*)' . $registeredEligibleSql);
     $countStatement->execute([
@@ -103,7 +103,7 @@ function slideshow_find_photo_for_serving(PDO $pdo, int $photoId): ?array
         'SELECT p.id, p.stored_filename, p.mime_type FROM photos p '
         . 'INNER JOIN visitors v ON v.id = p.visitor_id '
         . 'INNER JOIN consents c ON c.id = p.consent_id AND c.visitor_id = p.visitor_id '
-        . 'WHERE p.id = :id AND p.status = :status AND p.approval_status = :approval AND c.consent_version = :version LIMIT 1'
+        . 'WHERE p.id = :id AND p.status = :status AND p.approval_status = :approval AND c.consent_version = :version AND c.withdrawn_at IS NULL LIMIT 1'
     );
     $statement->execute([
         ':id' => $photoId,

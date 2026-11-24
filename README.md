@@ -1301,3 +1301,32 @@ Photo review currently displays the latest 200 records; visitor listing is pagin
 6. Confirm a photo with no matching consent or a consent version other than `1.0` cannot be approved.
 7. Re-test visitor registration, identification, upload, owner gallery and slideshow.
 8. Repeat on Windows XAMPP and Ubuntu Apache/PHP/MySQL or MariaDB.
+
+
+## Step 9: privacy and security controls
+
+- Visitor and administrator sessions use cookie-only, strict-mode PHP sessions with HttpOnly,
+  SameSite=Lax and Secure cookies when the application URL is HTTPS. Authentication rotates
+  the session ID; logout clears session data and expires the session cookie.
+- Visitor galleries and private photo delivery use the authenticated visitor ID from the server
+  session and a database ownership check. Public photo delivery is a separate endpoint and only
+  serves photos whose status is active, approval is approved, and linked consent is version 1.0
+  and has not been withdrawn.
+- Visitors can open `privacy.php` from their gallery and withdraw public-display consent. This
+  marks every currently active consent row for that visitor with `withdrawn_at`; historical
+  consent rows are retained. The private gallery remains available to the owner.
+- All existing modifying forms use session CSRF tokens and POST. Administrator pages and photo
+  previews require an authenticated administrator; approval requires active, matching visitor
+  consent. Passwords are verified with PHP password hashing APIs.
+- Private photo storage should be configured outside the web root with `UPLOAD_STORAGE_PATH`.
+  If it remains under the project, Apache deny rules must remain enabled. Never commit `.env`,
+  visitor images, database dumps, or real credentials.
+- Set `APP_ENV=production` and `APP_DEBUG=false` in production. PHP errors and exception details are never sent to browsers; details are logged server-side.
+  public responses use neutral messages. Use a least-privilege database account and restrictive
+  filesystem permissions (do not use world-writable permissions).
+
+### Step 9 database upgrade
+
+For an existing Steps 1–8 database, run `database/step9_consent_withdrawal_migration.sql` once. The migration was not run against your database while preparing this archive.
+For a new database, import the updated `database/schema.sql`. The only schema addition is nullable
+`consents.withdrawn_at`, which preserves prior consent rows and records withdrawal time.

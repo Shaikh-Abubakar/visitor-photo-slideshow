@@ -621,3 +621,43 @@ The student reported that the slideshow photograph was rendering only partially 
 The first attempt to write the implementation through the notebook runtime failed with a filesystem permission error. No project changes were made by that failed attempt. The files were then written using the project working directory after checking write access. This is recorded as a tooling correction, not a successful application test.
 
 The delivery archive excludes the uploaded `.env` file and actual contents of `storage/uploads/`; those may contain local credentials or private visitor images. The folder and `.gitkeep` placeholder remain. Keep your own `.env` and private upload backup outside the shared archive.
+
+
+## Step 9: privacy and security controls (implementation review)
+
+| Item | Detail |
+|------|--------|
+| Date | 2026-11-24 |
+| AI tool | ChatGPT (OpenAI), GPT-6 |
+| Source project | The user-provided `visitor-photo-slideshow.zip` archive. The supplied archive contained a `.env` file and 10 uploaded image files; these were excluded from the Step 9 output archive. `.env.example` and `storage/uploads/.gitkeep` were retained. |
+| Scope | Reviewed the existing PHP pages, security helpers, visitor authentication, gallery and slideshow selection/serving, administrator authentication/actions, configuration, schema, and project documentation. Changes are limited to Step 9. |
+| Implementation | Added consent withdrawal timestamp and migration; added authenticated visitor privacy page; made public slideshow selection/serving and administrator approval reject withdrawn consent; tightened logout cookie clearing; ensured exception details are never rendered to web clients; removed internal visitor IDs from visitor-facing gallery/upload output; documented Step 9. |
+
+### Schema change
+
+Added nullable `consents.withdrawn_at DATETIME`. Existing installations must run
+`database/step9_consent_withdrawal_migration.sql` exactly once. Historical consent rows remain.
+No database migration has been executed against the user's database in this session.
+
+### Verification status
+
+Only checks actually run in this development environment are listed below. Windows XAMPP and
+Ubuntu Apache are not available as target environments in this session. Database-backed browser
+flows require the user's configured MySQL/MariaDB database and have not been claimed as passed.
+
+### Tests actually run in the implementation environment
+
+| Check | Result | Detail |
+|------|--------|--------|
+| PHP syntax lint | **Passed** | `php -l` completed for every PHP file in the project, including the new privacy page and Step 9 test. Runtime used PHP 8.4.24 CLI. |
+| Step 9 static security checks | **Passed** | `php tests/check_step9_security.php`: 11/11 checks passed. |
+| Existing slideshow rendering/eligibility checks | **Passed** | `php tests/check_slideshow_rendering.php`: 11/11 checks passed. |
+| Database connection check | **Could not execute successfully** | `php tests/check_database.php` failed because this runtime does not have the `pdo_mysql` extension enabled. No MySQL/MariaDB connection was available. |
+| Existing gallery database tests | **Could not execute** | `php tests/check_gallery.php` reached its database-dependent stage and could not connect because `pdo_mysql` is unavailable. |
+| Existing visitor identification database tests | **Could not execute** | `php tests/check_identify.php` could not connect because `pdo_mysql` is unavailable. |
+| Existing upload database tests | **Could not execute** | `php tests/check_upload.php` checked Fileinfo and PHP version, then could not connect because `pdo_mysql` is unavailable. |
+| Existing slideshow-dimensions test | **Failed** | `php tests/check_slideshow_dimensions.php` stops because `slideshow_fit_dimensions()` is undefined. This existing test failure is not caused by the Step 9 changes and was not changed as part of Step 9. |
+
+### Not tested in this environment
+
+No browser-based visitor/admin login or logout flow, database ownership attack, direct URL access, real CSRF request, file upload attack, consent-withdrawal database update, or real slideshow exclusion was exercised. No Windows XAMPP or Ubuntu Apache environment was available. These remain user-side verification tasks; do not mark them as passed based on the static checks above.

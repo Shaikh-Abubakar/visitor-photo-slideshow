@@ -58,9 +58,8 @@ function gallery_page_end(): void
 /** The links and the logout button shown above every gallery view. */
 function gallery_render_menu(array $visitor): void
 {
-    echo '<p>You are identified as ' . html_escape($visitor['name']) . ' (visitor number '
-        . html_escape((string) $visitor['id']) . ').</p>' . "\n";
-    echo '<p><a href="' . html_escape(GALLERY_UPLOAD_PAGE) . '">Upload more photographs</a></p>' . "\n";
+    echo '<p>You are identified as ' . html_escape($visitor['name']) . '.</p>' . "\n";
+    echo '<p><a href="' . html_escape(GALLERY_UPLOAD_PAGE) . '">Upload more photographs</a> | <a href="privacy.php">Privacy controls</a></p>' . "\n";
 
     // Logout is a POST with the CSRF token (a plain link could be triggered by another web site).
     // identify.php already ends the session for action=logout, so no logout code is repeated here.

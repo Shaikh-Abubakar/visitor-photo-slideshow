@@ -99,8 +99,7 @@ function upload_render_form(array $visitor, array $errors, ?array $result, int $
     }
 
     echo '<h2>Upload photographs</h2>' . "\n";
-    echo '<p>You are identified as ' . html_escape($visitor['name']) . ' (visitor number '
-        . html_escape((string) $visitor['id']) . '). <a href="' . html_escape(UPLOAD_IDENTIFY_PAGE)
+    echo '<p>You are identified as ' . html_escape($visitor['name']) . '. <a href="' . html_escape(UPLOAD_IDENTIFY_PAGE)
         . '">Identification and end of session</a></p>' . "\n";
     echo '<p><a href="gallery.php">View my photographs</a></p>' . "\n";
 

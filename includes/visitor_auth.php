@@ -188,7 +188,19 @@ function visitor_logout(): void
     visitor_require_session();
 
     $_SESSION = [];
+    csrf_rotate();
     session_regenerate_id(true);
+    $params = session_get_cookie_params();
+    if (ini_get('session.use_cookies')) {
+        setcookie(session_name(), '', [
+            'expires' => time() - 42000,
+            'path' => $params['path'] ?: '/',
+            'domain' => $params['domain'],
+            'secure' => (bool) $params['secure'],
+            'httponly' => (bool) $params['httponly'],
+            'samesite' => $params['samesite'] ?? 'Lax',
+        ]);
+    }
 }
 
 // ---------------------------------------------------------------------------

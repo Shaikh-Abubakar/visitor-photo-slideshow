@@ -209,3 +209,19 @@ The limits and formats come from A3-A5 (10 photographs per submission, 5 MB each
 | K4 | First administrator is created only by CLI while `admins` is empty; no default credentials or public setup page. | Avoid an unauthenticated public account-claim endpoint. |
 | K5 | Admin photo list is capped at latest 200; visitor listing uses 20-row server-side pages. | Prevent unbounded result rendering; photo-list pagination is a future improvement if needed. |
 | K6 | Hiding a photo sets status hidden and approval rejected; the original consent record is retained. | Moderation must not rewrite visitor consent history. |
+
+
+## Step 9: privacy and security implementation notes
+
+- Consent withdrawal is implemented as a nullable `consents.withdrawn_at` timestamp. A visitor's
+  withdrawal updates all their currently unwithdrawn consent rows; it does not delete consent
+  history or delete private photos. The public slideshow and its image-serving endpoint both
+  require `withdrawn_at IS NULL`.
+- A withdrawn consent cannot be used by an administrator to approve a photo. Existing photos
+  remain in the owner's private gallery unless hidden by the administrator.
+- The visitor-facing gallery and upload page no longer display the internal visitor database ID.
+- `privacy.php` is authenticated and its withdrawal action is POST + CSRF protected.
+- Private storage outside the public web root remains a deployment configuration requirement;
+  the default in-project storage depends on the included Apache deny rules.
+- Browser session cookies are Secure only when HTTPS is detected from the request or configured
+  APP_URL. Plain HTTP on a local XAMPP development installation therefore does not set Secure.

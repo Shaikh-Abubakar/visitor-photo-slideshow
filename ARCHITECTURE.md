@@ -405,3 +405,41 @@ It has not been load-tested.
 `admin/auth.php` centralizes administrator session enforcement, CSRF validation and consent checks. `admin/login.php` verifies `password_hash()` values using `password_verify()` and regenerates the session ID. `admin/create_admin.php` is CLI-only and permits initial setup only while `admins` is empty. Dashboard, visitor and photo pages use PDO; visitor rows are paginated; private previews use an authenticated streaming endpoint.
 
 Photo visibility now has two independent controls: `consents.consent_version='1.0'` records visitor permission for public display; `photos.approval_status='approved'` records administrator approval; `photos.status='active'` means not hidden. Public selection and public image serving enforce all three conditions. New uploads start `pending`.
+
+
+## Step 9: privacy and security controls
+
+### Consent lifecycle
+
+`consents.withdrawn_at` is nullable. `NULL` means the recorded consent has not been withdrawn;
+a UTC timestamp records withdrawal. The authenticated visitor action in `privacy.php` updates
+all unwithdrawn consent records belonging to the session visitor in a transaction. Records are
+not deleted. The public selection query, public photo-serving query, and administrator approval
+check all require `withdrawn_at IS NULL` in addition to the existing consent-version, active
+photo, and approved-photo checks.
+
+### Photo access
+
+- Visitor gallery queries and `photo.php` bind the visitor ID from the server-side session and
+  the requested photo ID; changing an ID cannot cross visitor ownership.
+- `slideshow_photo.php` is intentionally public, but rechecks current consent, active status,
+  administrator approval, file location and actual image MIME before serving.
+- `admin/photo.php` is protected by administrator authentication and serves administrator-only
+  previews. Uploaded files remain in private storage and are not linked by raw filesystem paths.
+
+### Authentication and request controls
+
+- PHP sessions are cookie-only, strict-mode, HttpOnly and SameSite=Lax; Secure is enabled for
+  HTTPS. Visitor and administrator login regenerate the session ID. Logout clears session data,
+  rotates the ID and expires the cookie.
+- Mutating visitor and administrator forms use CSRF tokens and POST.
+- PDO uses exceptions, native prepared statements and credentials loaded through the existing
+  environment / `.env` configuration loader.
+- Uncaught web exceptions are logged and shown as neutral public messages when debug is disabled.
+  Production deployments must set `APP_ENV=production` and `APP_DEBUG=false`.
+
+### Schema change
+
+The Step 9 migration adds only `consents.withdrawn_at DATETIME NULL`. New installations use the
+updated schema; existing installations run `database/step9_consent_withdrawal_migration.sql`
+once. No other table or relationship is changed.

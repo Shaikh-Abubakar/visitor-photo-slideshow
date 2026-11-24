@@ -50,6 +50,7 @@ CREATE TABLE consents (
     visitor_id       BIGINT UNSIGNED NOT NULL,
     consent_version  VARCHAR(20)     NOT NULL,
     consented_at     DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    withdrawn_at    DATETIME        NULL DEFAULT NULL,
     PRIMARY KEY (id),
     KEY idx_consents_visitor_version (visitor_id, consent_version),
     UNIQUE KEY uq_consents_id_visitor (id, visitor_id),
