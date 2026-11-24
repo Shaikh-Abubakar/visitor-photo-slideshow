@@ -1,9 +1,6 @@
 # Architecture
 
-Status: **Steps 1 to 6.** The database schema, the documentation, the configuration loader, the
-database connection, visitor registration, visitor identification (Step 4), photo uploads (Step 5) and the visitor gallery with
-the private photo endpoint (Step 6) exist. Sections that say "planned" describe code that has not been built yet (the slideshow and
-the administrator pages).
+Status: **Steps 1 to 7.** The database schema, configuration, visitor registration and identification, photo uploads, visitor gallery, and automatic public slideshow exist. Administrator pages remain unbuilt.
 
 ---
 
@@ -50,8 +47,7 @@ unchanged.
 | `includes/security.php` | Application logic | Secure session start, CSRF token, security headers, `html_escape()`. Used by every page that shows a form. |
 | `includes/visitors.php` | Application logic and data | Name validation, code generation, code hashing, and `visitor_register()`, which runs the one prepared `INSERT` and the collision retry. |
 
-Planned module names (all lower case), not built yet: `consents.php`, `photos.php`, `storage.php`,
-`slideshow.php`, `auth.php`. Names may change; the separation will not.
+The public slideshow is implemented in `slideshow.php` and `slideshow_photo.php`, with selection and validation helpers in `includes/slideshow.php`. Administrator modules remain unbuilt.
 
 **How the connection works.** `db_connection()` opens one PDO connection the first time it is called and
 returns the same object afterwards, so a page that never needs the database never connects and no
@@ -173,7 +169,7 @@ POST register.php  action=clear    -> forgets the result ("register another visi
   file that a simultaneous second request was waiting for, which let a double click register twice (found in testing; see `AI_LOG.md`). Session-id renewal belongs
   at administrator login, a later step.
 * **Transport and headers:** the session cookie is `HttpOnly`, `SameSite=Lax`, `Secure` over HTTPS; pages are sent with `Cache-Control: no-store` and a restrictive
-  `Content-Security-Policy` (the pages use no CSS, JavaScript or images).
+  `Content-Security-Policy` (ordinary visitor pages keep CSS/JavaScript blocked; the public slideshow opts into its own same-origin CSS and image endpoint; JavaScript remains blocked).
 * **URLs:** the form action and the redirect are relative (`register.php`), so they work in a sub-folder (XAMPP) and at the site root (Ubuntu) without depending on `APP_URL`.
   `APP_URL` is used only to decide the cookie's `Secure` flag.
 
@@ -348,23 +344,16 @@ has an explicit consent record (the foreign key makes a photograph without one i
 
 ---
 
-## 9. How the slideshow will retrieve photographs (planned)
+## 9. Step 7: public slideshow (implemented)
 
-* The slideshow page asks for **one next photograph at a time**, using the last shown `id` as a cursor:
-  the first `active` photograph with `id` greater than the cursor, in `id` order. At the end it wraps
-  to the start. This needs no `OFFSET`, so it stays cheap as the table grows.
-* Only photographs with `status = 'active'` are used. Every photograph has a consent record because
-  `consent_id` is mandatory.
-* The page displays the image through a PHP "serve photo" script, which re-checks that the photograph
-  is allowed, sets the correct content type and streams the file from private storage. Step 6 built such a script
-  for a visitor's **own** photographs (`photo.php`, section 7). The slideshow is public, so it needs its own rule
-  and endpoint: `photo.php` must not be reused for it, because it deliberately serves only to the owner.
-* Display time comes from the `settings` table, falling back to `SLIDESHOW_DEFAULT_DURATION_SECONDS`.
-* Because JavaScript is not used, the page advances with an HTML `<meta http-equiv="refresh">`
-  carrying the next cursor. This causes a full page reload per photograph. Whether JavaScript may be
-  used is an open question (see `ASSUMPTIONS.md`, section E).
-
----
+* `slideshow.php` reads a cursor (`after` photo ID) and selects the next eligible photo using a prepared keyset query (`p.id > cursor`, ascending, `LIMIT 1`); if none remains, it wraps to the first eligible photo. It fetches one row at a time and never loads the photo collection into PHP memory. A count query bounds skipping of unusable file records.
+* Public eligibility requires an existing `visitors` row, `photos.status = 'active'`, a matching consent row (`c.id = p.consent_id` and `c.visitor_id = p.visitor_id`), and `c.consent_version = '1.0'`. The existing consent text version 1.0 explicitly grants public slideshow display. No administrator approval state exists in the current schema. The screen viewer is public and does not need to register; the photo contributor must already be registered/identified to upload.
+* `slideshow_photo.php` is a separate public image-serving endpoint. It rechecks public eligibility for every image request, then uses the Step 6 filename/path/MIME validation helpers before streaming from private storage. `photo.php` remains visitor-session/owner-only and is not weakened.
+* `SLIDESHOW_DEFAULT_DURATION_SECONDS` is validated by the centralized configuration loader (default 5 seconds; 2–3600). The page uses HTML meta refresh and the next ID cursor. Each full reload performs a new database lookup, which is also how new approvals are discovered. The empty state retries after 30 seconds.
+* The selected image is validated with PHP `getimagesize()`, then its original bytes are streamed from private storage. `slideshow.css` centers the image in a `100vw` × `100vh` stage and applies `max-width: 100vw`, `max-height: 100vh`, automatic dimensions and `object-fit: contain`. This adapts to the real browser viewport and avoids cropping/stretching. It does not force small sources to enlarge, so low-resolution uploads are not artificially upscaled; their own native detail still limits sharpness.
+* CSS is used only by the slideshow and is allowed by a narrow `style-src 'self'` CSP permission on that page. JavaScript remains blocked. No external package, CDN, or image processing library is used.
+* This is page-refresh progression, not true real-time push or uninterrupted animation. Network/server/image transfer time can extend the actual interval.
+* No schema migration was needed. The existing `photos.status` column and explicit consent version provide the available public eligibility rule. Unexpected statuses, including any manually introduced rejected/deleted-like value, do not match `active`; physical/database deletion removes the record.
 
 ## 10. How returning visitors are handled (planned)
 
@@ -404,7 +393,8 @@ It has not been load-tested.
 | Sessions in PHP defaults | Shared session storage if several servers are used |
 | No backups | Scheduled database dumps and file backups |
 | Slideshow reloads the page | Use JavaScript if the brief allows it |
+| Very low-resolution uploads cannot look detailed on a large TV | Ask uploaders for original/high-resolution files; no software can restore missing source detail |
 | Consent withdrawal not modelled | Add a withdrawal timestamp if required |
 | The gallery shows full-size files scaled by the browser (Step 6) | Generate thumbnails (needs an image library) |
 | A visitor cannot see photographs with status `hidden`, and the schema cannot say why a photograph is hidden (Step 6) | Add a field or status that separates "removed by an administrator" from "hidden by the visitor" |
-| `consent_version` is not compared with the current consent text (Step 6) | Decide when an old consent version stops being valid |
+| The owner gallery does not compare `consent_version`; public slideshow currently accepts only version `1.0` (Steps 6–7) | Review and explicitly migrate the public-consent policy when consent wording changes |

@@ -360,6 +360,14 @@ function config_load(): array
     }
     $values['UPLOAD_ALLOWED_MIME_TYPES'] = implode(',', $mimeList);
 
+    // Step 7: browser-refresh slideshow timing. Keep the interval bounded to avoid
+    // accidental rapid refresh loops or impractically long stale display periods.
+    $slideshowDuration = config_parse_int($read('SLIDESHOW_DEFAULT_DURATION_SECONDS', '5'), 2, 3600);
+    if ($slideshowDuration === null) {
+        throw config_error('SLIDESHOW_DEFAULT_DURATION_SECONDS', 'must be a whole number from 2 to 3600.');
+    }
+    $values['SLIDESHOW_DEFAULT_DURATION_SECONDS'] = $slideshowDuration;
+
     $loaded = ['values' => $values, 'sources' => $sources, 'file' => $file];
     return $loaded;
 }

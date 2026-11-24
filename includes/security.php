@@ -79,19 +79,20 @@ function session_start_secure(): void
 /**
  * Security headers for pages that show a form or personal data. Call before any output.
  *
- * $allowOwnImages (Step 6, default false = the behaviour of Steps 3 to 5): when true, the page may
- * load images from THIS site only (img-src 'self'). gallery.php needs it to show photographs
- * through photo.php; every other directive stays as strict as before.
+ * $allowOwnImages (default false): permit images from this site only (img-src 'self').
+ * $allowOwnStylesheets (default false): permit external stylesheets from this site only
+ * (style-src 'self'). Only the public slideshow opts into both permissions.
  */
-function send_security_headers(bool $allowOwnImages = false): void
+function send_security_headers(bool $allowOwnImages = false, bool $allowOwnStylesheets = false): void
 {
     header('X-Content-Type-Options: nosniff');
     header('X-Frame-Options: DENY');
     header('Referrer-Policy: no-referrer');
-    // The pages use no CSS and no JavaScript, so everything except form posting to this site
-    // (and, for the gallery only, images from this site) can be blocked.
+    // Keep the default restrictive. Gallery/slideshow opt into same-origin images;
+    // only the slideshow opts into its own same-origin CSS file. JavaScript remains blocked.
     $images = $allowOwnImages ? " img-src 'self';" : '';
-    header("Content-Security-Policy: default-src 'none';" . $images . " form-action 'self'; frame-ancestors 'none'; base-uri 'none'");
+    $styles = $allowOwnStylesheets ? " style-src 'self';" : '';
+    header("Content-Security-Policy: default-src 'none';" . $images . $styles . " form-action 'self'; frame-ancestors 'none'; base-uri 'none'");
     // The page can show a visitor code: it must not be stored by the browser or by a shared cache.
     header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
     header('Pragma: no-cache');

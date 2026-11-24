@@ -510,3 +510,96 @@ All are listed with reasons in `ASSUMPTIONS.md`, section I. The student should r
 * Tests I ran myself, where (for example `gallery.php` on XAMPP, phpMyAdmin, `tests/check_gallery.php`), and the results:
 * Things I could not explain yet:
 
+
+
+## Step 7: Automatic photo slideshow
+
+### Work recorded for this archive
+
+* Inspected the supplied ZIP before editing: `database/schema.sql`, `config/config.php`, `includes/uploads.php`, `includes/gallery.php`, `includes/security.php`, `includes/bootstrap.php`, `photo.php`, `.env.example`, and the existing project documentation.
+* Confirmed the actual schema: `photos.status` allows `active` and `hidden`; photos contain `stored_filename` and `mime_type`; `photos.consent_id` is constrained to a consent belonging to the same visitor; `consents` stores `consent_version`. The upload form's version `1.0` wording explicitly agrees to public slideshow display. There is no administrator approval/rejection column or workflow.
+* No database schema change was made. Public slideshow queries require active status, matching visitor/consent relationship, and consent version `1.0`.
+* Created `slideshow.php`, `slideshow_photo.php`, and `includes/slideshow.php`. Added validated `SLIDESHOW_DEFAULT_DURATION_SECONDS` configuration (default 5 seconds). Kept `photo.php` and gallery ownership logic unchanged.
+* Updated `README.md`, `ARCHITECTURE.md`, and `ASSUMPTIONS.md` with the selection rule, public endpoint security, TV URL, timing, refresh behavior, limitations and test status.
+
+### Verification actually performed
+
+* `php -l` was run on every PHP file after the Step 7 changes; all 21 PHP files reported `No syntax errors detected`.
+* The PHP runtime available for this work reports PHP 8.4.24 and has PDO and Fileinfo, but no `pdo_mysql` module. No MySQL/MariaDB service was available to execute database-backed tests. No real browser or XAMPP/Ubuntu Apache session was used.
+* Consequently the 14 requested Step 7 behavior tests and Steps 1-6 regression tests are **not claimed as passed** in this work.
+
+
+## Step 7 display-rendering correction (requested by the student)
+
+### Student suggestion / requirement
+
+The student reported that the slideshow photograph was rendering only partially / at an unsatisfactory size on the display and requested that the photo be rendered properly. The student explicitly asked that this suggestion be recorded in this AI log as a project-requirement suggestion. This request is the student's feedback and is not represented as an independently observed test result.
+
+### Inspection and change made by the AI
+
+* Inspected `slideshow.php`, `includes/slideshow.php`, the centralized configuration loader, and the Step 7 documentation. The old page emitted `<img ... width="100%">`. The HTML `img` `width` attribute expects a numeric pixel dimension; a percentage string is invalid and can be ignored by browsers, leaving a small source image displayed at its intrinsic dimensions.
+* Updated `includes/slideshow.php` to read each validated image's intrinsic pixel dimensions using PHP `getimagesize()` and added `slideshow_fit_dimensions()`. The helper calculates positive numeric width/height values that fit inside the display canvas while preserving the full image aspect ratio.
+* Updated `slideshow.php` to emit the calculated numeric `width` and `height` attributes. The whole image is fitted without intentional cropping or stretching. The default target canvas is 1920 × 1080 pixels; new optional settings `SLIDESHOW_DISPLAY_WIDTH_PIXELS` and `SLIDESHOW_DISPLAY_HEIGHT_PIXELS` are validated by `config/config.php` and documented in `.env.example`. The existing `.env` was not overwritten.
+* Added `tests/check_slideshow_dimensions.php` so the fitting calculation can be rechecked without a database. Updated `README.md`, `ARCHITECTURE.md`, and `ASSUMPTIONS.md` to explain the rendering fix, how to match the display canvas to the TV/computer resolution, and the limitation that CSS/JavaScript are not used to detect the actual browser viewport. Low-resolution uploads can look soft when enlarged.
+* No JavaScript, CSS, external package, database change, or change to visitor ownership/security checks was introduced.
+
+### Verification performed for this correction
+
+* PHP syntax checks were run on all 22 PHP files in the project after the change.
+* `php tests/check_slideshow_dimensions.php` passed four landscape/portrait/square image sizing cases and the invalid-input case; checks verify output dimensions stay within the configured canvas and preserve aspect ratio within integer-rounding tolerance.
+* Sample image files included in the supplied archive were read with PHP `getimagesize()` to confirm that intrinsic dimensions can be retrieved.
+* A MySQL/MariaDB-backed slideshow run and a real browser/TV visual check were not available in this environment. Therefore actual screen appearance, database selection, meta-refresh cycling and Windows XAMPP/Ubuntu Apache behaviour remain unverified.
+
+
+---
+
+## Step 7, correction 2: responsive photo rendering and registration eligibility
+
+| Item | Detail |
+|------|--------|
+| Date | 2026-11-24 |
+| AI tool | ChatGPT (OpenAI), used in this conversation with a local project-file editing environment. The exact model label should be checked in the ChatGPT interface if the student needs it for formal reporting. |
+| Student's key prompts/interactions | The student reported that the slideshow image was blurry and too large / did not fit the screen; clarified that CSS was permitted; asked why the public slideshow can display while the viewer has not registered; and explicitly requested that two AI mistakes, how they were noticed, and how they were corrected be recorded in this log. |
+| Scope | Updated `slideshow.php`, `slideshow.css` (new), `includes/slideshow.php`, `includes/security.php`, slideshow configuration and tests, plus `README.md`, `ARCHITECTURE.md`, `ASSUMPTIONS.md` and this log. No database schema or Step 8 changes. |
+
+### Key prompts/interactions (six recorded items)
+
+1. **Original Step 7 implementation request:** the student required a PHP-generated public slideshow, 5-second default progression, HTML meta refresh, consent-aware selection, private image serving, cross-platform operation, and updates to the project documentation.
+2. **First rendering complaint:** the student reported that the photograph appeared partly / at an unsatisfactory size. The AI inspected the generated markup and replaced the invalid percentage `img` width attribute with server-calculated dimensions.
+3. **Second rendering complaint:** the student reported that the photo was still blurry and too large for the display, and clarified that CSS could be used. This showed that a fixed PHP pixel canvas did not solve the actual browser viewport problem.
+4. **Registration question:** the student asked why the slideshow could display even though the person viewing it had not registered. This required clarifying the difference between an unauthenticated public viewer and a registered photo contributor.
+5. **Eligibility review:** the AI inspected the current `visitors`, `photos` and `consents` schema and added an explicit `visitors` join to both selection and secure serving queries. Photo contributors must still have a registered visitor record, an active photo record and matching consent version `1.0`.
+6. **AI log requirement:** the student asked for at least two honest cases where the AI was wrong, how the student noticed, and what the AI changed. This section records the two cases below; the student's observations are not claimed as automated test results.
+
+### Case where the AI was wrong 1: fixed image dimensions did not solve TV/browser rendering
+
+* **What the AI did wrong:** The first correction relied on PHP-generated numeric image `width` and `height` values based on a configured 1920 × 1080 canvas. It also enlarged small source photographs to fill that canvas. This did not adapt to the actual browser viewport and could make low-resolution images appear soft. The AI incorrectly described that approach as a complete rendering fix.
+* **How the student noticed:** The student opened the slideshow and reported that the image was still blurry, oversized / not fitting the screen, and unsatisfactory. The student also clarified that CSS was allowed.
+* **How it was fixed:** Added `slideshow.css` with a viewport-sized black stage, centered image, `max-width: 100vw`, `max-height: 100vh`, `width: auto`, `height: auto`, and `object-fit: contain`. The browser now scales large originals down to fit without cropping or stretching and does not deliberately enlarge small source images. CSS is permitted only for this slideshow; JavaScript remains unused and blocked. The old fixed display-width/height settings and dimension-calculation helper were removed from active configuration/code.
+* **What further inspection found:** The supplied ZIP contains nine private PNG files with dimensions from 191×178 to 337×226 pixels. These are far below common TV display dimensions and explain why enlarging those bundled sample files makes them look blurry. A photo file on disk is not selected unless the configured database has a matching eligible row.
+* **Remaining limitation:** CSS cannot create missing detail in a low-resolution or already blurry source photo. Small photos are deliberately not upscaled; they can appear smaller than the screen. A sharp full-screen result requires a sharp, sufficiently high-resolution original. Real browser/TV appearance still needs confirmation on the student's target display.
+
+### Case where the AI was wrong 2: the visitor-registration rule was not made explicit enough
+
+* **What the AI did wrong:** Earlier responses said the public slideshow did not require a visitor login, but did not clearly explain that this applies to the person viewing the TV, not the person contributing photographs. The first Step 7 selection query also joined `photos` to `consents` but did not explicitly join the `visitors` table, even though the brief named all three tables. The schema's foreign keys already require a real visitor row in a correctly created database, but the query should state and enforce that relationship visibly too.
+* **How the student noticed:** The student opened the slideshow without registering and saw that it still displayed photos, then questioned how that could happen. This revealed that the public-viewer rule and the registered-contributor rule had not been explained clearly enough.
+* **How it was fixed:** Added `INNER JOIN visitors v ON v.id = p.visitor_id` to the slideshow count/selection queries and the secure photo-serving query. Updated the empty-state message and documentation: the TV/browser viewer does not need to register; photos are shown only when a registered visitor has uploaded them and explicitly agreed to public slideshow display. A clean database with no eligible photo rows should show the empty-state message. If photos appear, the database may already contain visitor/photo/consent rows from earlier testing or prior use; opening the public page does not create them. The owner-only `photo.php` endpoint was not changed.
+* **Remaining limitation:** This archive does not contain a verified snapshot of the student's live XAMPP database, so the specific rows responsible for the student's observed images could not be identified here. The student can inspect the existing `visitors`, `photos` and `consents` tables in phpMyAdmin to identify test/old records.
+
+### Files changed for this correction
+
+* `slideshow.css` (new): responsive viewport fitting, centered display, black letterbox background and styled empty/error messages.
+* `slideshow.php`: loads the stylesheet, uses the real viewport, retains the configurable meta-refresh interval, and explains the no-photo state.
+* `includes/slideshow.php`: requires a matching visitor row, same-visitor consent version `1.0`, active status, safe private path and matching detected MIME type for both selection and serving.
+* `includes/security.php`: adds an opt-in same-origin stylesheet CSP permission. Only the slideshow opts in; JavaScript remains blocked.
+* `config/config.php`, `.env.example` and local `.env`: removed the now-obsolete fixed display-canvas settings.
+* `tests/check_slideshow_rendering.php` (new): database-free static checks of viewport CSS, no forced upscaling/cropping, page stylesheet wiring, CSP opt-in and the visitor/consent/status query guards. The previous PHP dimension-helper test was removed because that helper is no longer used.
+* `README.md`, `ARCHITECTURE.md`, `ASSUMPTIONS.md`: updated the rendering, public-viewer/contributor distinction, consent requirements and verification instructions.
+
+### Verification actually performed for this correction
+
+* `php -l` reported no syntax errors in all 23 PHP files in the project.
+* `php tests/check_slideshow_rendering.php` passed all 11 static rendering/eligibility checks. These checks inspect the source/CSS/SQL structure without a database.
+* PHP `getimagesize()` read all nine private PNGs included in the archive; the dimensions range from 191×178 to 337×226 pixels. This identifies a concrete reason the bundled samples become blurry when enlarged to a TV-sized display.
+* These results do not prove that an actual TV/browser renders correctly or that the student's current database contains/does not contain old records.
+* No live XAMPP/MySQL/MariaDB run, real browser screenshot, actual automatic progression test, or Step 1–6 regression run was available during this correction. The student should record their own results in the student review section after testing the extracted archive.
