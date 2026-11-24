@@ -1,7 +1,7 @@
 # Architecture
 
-Status: **Step 1 design.** Only the database schema and documentation exist today.
-Sections describing PHP code say "planned": nothing described there has been built yet.
+Status: **Steps 1 to 3.** The database schema, the documentation, the configuration loader, the
+database connection and visitor registration exist. Sections that say "planned" describe code that has not been built yet.
 
 ---
 
@@ -17,7 +17,7 @@ no JavaScript. One common codebase runs on Windows (XAMPP) and Ubuntu.
 
 ---
 
-## 2. PHP and MySQL architecture (planned)
+## 2. PHP and MySQL architecture (partly built)
 
 Three layers, kept separate so each can change without rewriting the others:
 
@@ -27,11 +27,44 @@ Three layers, kept separate so each can change without rewriting the others:
 | Application logic | Rules: validation, consent checks, upload flow, code generation | `includes/` (reusable functions) |
 | Data and storage | PDO queries (prepared statements only) and file storage | `includes/` (database and storage modules) |
 
-Planned module names (all lower case): `config.php`, `database.php`, `visitors.php`, `consents.php`,
-`photos.php`, `storage.php`, `slideshow.php`, `auth.php`. Names may change; the separation will not.
+**Built in Step 2** (the foundation every later module uses):
 
-Database access always uses **PDO prepared statements** with the connection charset `utf8mb4` and
-the connection time zone `+00:00` (UTC).
+| File | Responsibility |
+|------|----------------|
+| `config/config.php` | Configuration loader: `app_config()`, `app_path()`, `app_url()` |
+| `config/database.php` | `db_connection()`: the shared PDO connection |
+| `includes/bootstrap.php` | Common start-up: error handling, time zone, loads the two files above |
+| `tests/check_database.php` | Command-line check of the configuration and the database |
+
+Step 1 planned `config.php` and `database.php` inside `includes/`; they were placed in `config/`
+instead, as the Step 2 brief requires. The separation between configuration, connection and start-up is
+unchanged.
+
+**Built in Step 3** (visitor registration):
+
+| File | Layer | Responsibility |
+|------|-------|----------------|
+| `register.php` | Presentation | The registration page: reads the form, calls the functions below, writes the HTML. It contains no SQL. |
+| `includes/security.php` | Application logic | Secure session start, CSRF token, security headers, `html_escape()`. Used by every page that shows a form. |
+| `includes/visitors.php` | Application logic and data | Name validation, code generation, code hashing, and `visitor_register()`, which runs the one prepared `INSERT` and the collision retry. |
+
+Planned module names (all lower case), not built yet: `consents.php`, `photos.php`, `storage.php`,
+`slideshow.php`, `auth.php`. Names may change; the separation will not.
+
+**How the connection works.** `db_connection()` opens one PDO connection the first time it is called and
+returns the same object afterwards, so a page that never needs the database never connects and no
+page connects twice. It uses exceptions, real (non-emulated) prepared statements, associative rows,
+no persistent connection, a 5-second connect timeout and `utf8mb4`. Right after connecting it sets
+the session time zone to `+00:00` (UTC) and the collation to `utf8mb4_unicode_ci`. Database access
+always uses **PDO prepared statements**.
+
+**How failures are handled.** A failed connection logs the technical reason on the server and throws
+`DatabaseConnectionException` with a fixed message that has no password, user name or server text.
+The original PDO exception is deliberately not chained, because its stack trace could contain the
+connection arguments; PHP's `zend.exception_ignore_args` is also switched on. A configuration mistake
+throws `AppConfigException`, whose message names the setting but never its value. On web requests an
+exception handler in the bootstrap shows visitors only "Something went wrong. Please try again
+later."; details appear only when `APP_DEBUG` is true, which is refused when `APP_ENV` is production.
 
 ### Cross-platform rules (apply to all code)
 
@@ -42,20 +75,31 @@ the connection time zone `+00:00` (UTC).
 
 ---
 
-## 3. Configuration (planned)
+## 3. Configuration (built in Step 2)
 
-Configuration comes from environment-style settings in a `.env` file, with a placeholder-only
-`.env.example` committed to the repository. No third-party configuration library is used; a small
-PHP function will read the file.
+Each setting is looked up in this order: a **real environment variable**, then the optional **`.env`**
+file, then a **default** in `config/config.php`. An empty value counts as "not set". A placeholder-only
+`.env.example` is committed to the repository. No third-party configuration library is used: a small
+PHP function reads the file. `config_load()` reads and validates every setting once per request. The
+`.env` file is normally in the project root; the real environment variable `APP_ENV_FILE` can point to
+one kept outside the web folder.
 
 | Variable | Purpose |
 |----------|---------|
+| `APP_NAME`, `APP_DEBUG` | Application name; whether error details may be shown (never in production) |
 | `APP_ENV`, `APP_URL` | Environment name and public web address |
 | `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD` | Database connection |
 | `VISITOR_CODE_PEPPER` | Secret key for hashing visitor codes |
 | `UPLOAD_STORAGE_PATH` | Where photographs are stored (empty = default `storage/uploads`) |
 | `UPLOAD_MAX_FILES`, `UPLOAD_MAX_FILE_SIZE_BYTES`, `UPLOAD_ALLOWED_MIME_TYPES` | Upload limits |
 | `SLIDESHOW_DEFAULT_DURATION_SECONDS` | Default display time; runtime override lives in `settings` |
+
+In Step 2 the loader reads every variable above **except** `VISITOR_CODE_PEPPER`,
+`UPLOAD_ALLOWED_MIME_TYPES` and `SLIDESHOW_DEFAULT_DURATION_SECONDS`, which later steps will add.
+Step 3 did not add any of them (see section 5 for why `VISITOR_CODE_PEPPER` is still unused).
+Values are checked before use (for example the database host, name and port are restricted to safe
+characters because they are placed in the connection string), and the storage path must be an absolute
+path for the operating system in use.
 
 Values an administrator should change while the system is running (such as the slideshow duration)
 live in the `settings` table. Values that are secrets or machine-specific live in `.env`.
@@ -82,17 +126,54 @@ and sends it only if the photograph is allowed to be shown (see section 9).
 ## 5. Visitor identification approach
 
 * The system **generates a random visitor code** and shows it to the visitor once.
-* Only a **keyed hash** is stored: `HMAC-SHA-256(code, VISITOR_CODE_PEPPER)` as 64 hex characters in
-  `visitors.visitor_code_hash`, which has a `UNIQUE` index.
+* Only a **hash** is stored, as 64 hex characters in `visitors.visitor_code_hash`, which has a `UNIQUE` index.
+  The Step 1 design was a **keyed** hash, `HMAC-SHA-256(code, VISITOR_CODE_PEPPER)`. **What Step 3 actually
+  does is a plain `SHA-256(code)`**, because the Step 3 brief asks for SHA-256 and the configuration loader does not
+  read `VISITOR_CODE_PEPPER` yet (see "Built in Step 3" below and `ASSUMPTIONS.md`, G1).
 * The plaintext code is never stored in the database, logs or files.
 * A returning visitor types the code; the application computes the same hash and does one indexed
   lookup. This stays fast with many visitors, which a per-row salted hash (bcrypt) would not.
-* Because the hash is keyed with a secret that is not in the database, a database leak alone does not
-  allow codes to be recovered by guessing.
+* Planned (keyed) design: because the hash is keyed with a secret that is not in the database, a database
+  leak alone does not allow codes to be recovered by guessing. With the plain SHA-256 used in Step 3 that
+  protection comes from the length of the code instead: a code has 160 random bits, so a stolen hash
+  cannot realistically be reversed by guessing, but it also has no secret behind it.
 * Visitors give only a name: no phone number and no email address.
 
 Limitation: anyone who obtains a code can act as that visitor. Rate limiting of code attempts is a
 future step (see section 12).
+
+### Built in Step 3: visitor registration
+
+```
+GET  register.php                  -> form (hidden CSRF token from the session)
+POST register.php  action=register -> 1 check CSRF token         (fail: 403, nothing stored)
+                                      2 validate the name        (fail: 422, form shown again)
+                                      3 make a code (random_bytes), hash it (SHA-256)
+                                      4 INSERT (name, hash) with a prepared statement;
+                                        duplicate hash (error 1062) -> new code, retry, max 5 times
+                                      5 keep name + code in $_SESSION, use up the CSRF token
+                                      6 303 redirect to register.php?registered=1   (Post-Redirect-Get)
+GET  register.php?registered=1     -> shows the code from the session (same code on every refresh)
+POST register.php  action=clear    -> forgets the result ("register another visitor")
+```
+
+* **Code:** 20 bytes from `random_bytes()` (160 bits), Base32 letters `A-Z2-7`, 8 groups of 4 with hyphens (39 characters).
+* **Hash input:** the code in capital letters without hyphens and spaces (`visitor_code_normalize()`), so a code typed later
+  in lower case or without hyphens gives the same hash. The returning-visitor step must hash with `visitor_code_hash()` from `includes/visitors.php`.
+* **Collision handling:** the unique key `uq_visitors_code_hash` is the check. A failed insert stores nothing, so a retry cannot leave a half-registered visitor.
+  Looking the hash up first and inserting afterwards would not be safe when two visitors register at once.
+* **Where the plaintext code exists:** on the visitor's screen, and in the server-side PHP session for up to 15 minutes so that the result page can be refreshed.
+  It is never in a database column, a log message or an exception message.
+* **No duplicate on refresh or double click:** the result page is a `GET`; the `POST` is answered with a redirect; the CSRF token is single-use, and PHP's default
+  file session handler lets only one request per session run at a time, so a second simultaneous `POST` meets the used-up token. This relies on the default
+  session handler; a custom handler without locking would need its own protection.
+* **The session id is not renewed** after registering. Registering gives the visitor no extra rights, and renewing the id deleted the session
+  file that a simultaneous second request was waiting for, which let a double click register twice (found in testing; see `AI_LOG.md`). Session-id renewal belongs
+  at administrator login, a later step.
+* **Transport and headers:** the session cookie is `HttpOnly`, `SameSite=Lax`, `Secure` over HTTPS; pages are sent with `Cache-Control: no-store` and a restrictive
+  `Content-Security-Policy` (the pages use no CSS, JavaScript or images).
+* **URLs:** the form action and the redirect are relative (`register.php`), so they work in a sub-folder (XAMPP) and at the site root (Ubuntu) without depending on `APP_URL`.
+  `APP_URL` is used only to decide the cookie's `Secure` flag.
 
 ---
 
@@ -148,9 +229,9 @@ erDiagram
 
 | Relationship | Rule |
 |--------------|------|
-| visitor → consents | One visitor, many consent records. A new consent record is created for every photo-upload session, even if the consent version is unchanged. |
+| visitor → consents | One visitor, many consent records. A **new record is created for every photo upload session**, even when the consent text version has not changed, so several records can share the same visitor and the same `consent_version`. There is no unique key on (visitor, consent version). |
 | visitor → photos | One visitor, many photographs. |
-| consent → photos | Each photograph references exactly one consent record (`consent_id NOT NULL`). |
+| consent → photos | Each photograph references exactly one consent record (`consent_id NOT NULL`): the record created for the upload session in which it was uploaded. One consent record can cover many photographs (all photographs of that session). |
 | photo → consent + visitor | The composite key `(consent_id, visitor_id)` must match a row in `consents`, so a photograph can never use another visitor's consent. |
 | Deleting | All foreign keys are `ON DELETE RESTRICT`: parents cannot be removed while children exist. |
 
@@ -160,7 +241,7 @@ erDiagram
 |-------|---------|
 | `visitors.uq_visitors_code_hash` | Returning-visitor lookup by code; guarantees unique codes |
 | `visitors.idx_visitors_name` | Administrator search by name |
-| `consents.idx_consents_visitor_version` | Lookup of a visitor's consent records by consent version; not unique, so repeat upload sessions can be recorded |
+| `consents.idx_consents_visitor_version` | Ordinary (non-unique) index on `(visitor_id, consent_version)`: foreign-key support and lookup of a visitor's consents. It does not prevent several records with the same version. |
 | `consents.uq_consents_id_visitor` | Target of the composite foreign key from `photos` |
 | `photos.uq_photos_stored_filename` | No two photographs can share a stored file |
 | `photos.idx_photos_visitor` | A visitor's gallery (InnoDB adds `id`, so it is `(visitor_id, id)`) |
@@ -168,39 +249,60 @@ erDiagram
 | `photos.idx_photos_status` | Slideshow and administrator filters (`status`, then `id`) |
 | `admins.uq_admins_username` | Unique, case-insensitive administrator names |
 
-Verification: `database/schema.sql` was imported into an empty MySQL 8.0 database and the unique,
-foreign-key, `NOT NULL`, `CHECK` and delete-restriction rules were each tested (see `AI_LOG.md`).
+Verification: the AI imported `database/schema.sql` into an empty MySQL 8.0 database in its own sandbox and tested
+the unique, foreign-key, `NOT NULL`, `CHECK` and delete-restriction rules, and that several consent records
+for the same visitor and version are accepted. These are AI-environment tests, not student tests; see
+`AI_LOG.md` for exactly what was run and what was not.
 
 ---
 
-## 7. Photo storage approach
+## 7. Photo storage approach (built in Step 5)
 
 * **No image data in MySQL.** The database holds only metadata (name, size, type, status).
-* Files are written to a **private directory**: `storage/uploads/` by default or `UPLOAD_STORAGE_PATH`.
-* **Server-generated names.** The stored name is random (32 hex characters) plus an extension chosen
-  from the detected MIME type. The visitor's original file name is saved only for display and is never
-  used to build a path. This blocks path tricks and name collisions between simultaneous uploads.
-* **Organized directories.** Files are grouped into sub-folders taken from the first characters of the
-  random name (for example `ab/cd/abcd….jpg`). The folder is calculated from the name, so the database
-  does not need a path column, and no single folder grows huge.
-* **Replaceable storage.** All file operations (save, open, delete) will sit in one `storage` module.
-  The database stores only `stored_filename`, never an absolute path, so moving to another storage
-  service later means rewriting that one module, not the whole application.
-* Uploads are validated by size, count and **detected** content type (not by the file extension the
-  visitor supplied).
+* Files are written to a **private directory**: `UPLOAD_STORAGE_PATH`, or `storage/uploads/` inside the project when that is empty.
+  **Recommended: a folder outside the project and outside the web root** (README, "Private photograph storage"). A folder inside the
+  project is protected only by web-server rules (`storage/.htaccess` and, on Ubuntu, the virtual host). Those rules are a safety net, not
+  something this design relies on, so the upload code writes a warning to the server log and `tests/check_upload.php` prints one
+  when the folder is inside the project.
+* **Server-generated names.** The stored name is 24 random bytes from `random_bytes()` written as 48 lower-case hex characters, a dot and an
+  extension chosen from the **detected** content type (`jpg`, `png` or `webp`), for example `3f9c…e1.jpg` (at most 53 characters; the column is 64).
+  The visitor's original file name is cleaned (last path part only, valid UTF-8, no control characters, at most 255 characters) and saved
+  only as metadata in `photos.original_filename`; it is never used to build a path.
+* **Organized directories.** Files are grouped into sub-folders named after the first two characters of the stored name
+  (`<storage>/3f/3f9c…e1.jpg`). The folder is calculated from the name, so the database needs no path column and no single folder grows huge.
+  `upload_stored_path()` accepts only names of exactly that shape, so no `..` or path separator can reach the file system.
+* **Files are never executed or served directly.** The extension comes from the content type, nothing in the storage folder is reachable
+  by a URL when the folder is outside the web root, and the later gallery and slideshow steps will stream files through PHP after checking
+  permission and consent.
+* **Replaceable storage.** All file operations sit in `includes/uploads.php`. The database stores only `stored_filename`, never an absolute path.
+* Uploads are validated by PHP upload error, size, count, **detected** content type (Fileinfo), the file name extension and
+  `getimagesize()` (the file must be a real image of that type), not by what the browser claims.
 
 ---
 
-## 8. Upload flow and consistency (planned)
+## 8. Upload flow and consistency (built in Step 5)
 
-1. Check count, size and type for each file.
-2. Make sure the visitor has a consent record for the current consent version.
-3. Save files under random names in private storage.
-4. Insert all `photos` rows inside **one database transaction**.
-5. If anything fails, roll back the transaction and delete the files just written.
+`upload.php` (page) and `includes/uploads.php` (logic), in this order:
 
-Several visitors uploading at once is safe because names are random and unique, and each request
-has its own transaction.
+1. **Authentication:** `visitor_require_login()`. The visitor id comes only from the server-side session (Step 4); the form has no visitor field.
+2. **Request size:** a request larger than `post_max_size` arrives with an empty `$_POST` and `$_FILES`; it is reported as too large (HTTP 413).
+3. **CSRF token.**
+4. **Consent:** the consent box must be ticked in this request. Consent is never automatic and is asked for in every upload session.
+5. **File checks** (`upload_process()`): number of files (more than `UPLOAD_MAX_FILES` rejects the whole submission), then for each file the PHP
+   upload error, `is_uploaded_file()`, size (not empty, not above `UPLOAD_MAX_FILE_SIZE_BYTES`), Fileinfo type, extension for that type, and
+   `getimagesize()`. A file that fails is rejected and reported; the others continue.
+6. **Store:** every accepted file is moved into private storage under a random name.
+7. **Record:** in **one database transaction**: insert a new `consents` row (visitor, consent version, time) for this upload session, then one `photos`
+   row per stored file referring to that consent, with the visitor id, stored and original name, detected MIME type, size and status.
+8. **Failure:** on any technical failure the transaction is rolled back **and every file stored for this submission is deleted**, because a rollback
+   does not remove files. The visitor sees a generic message; details go to the server log.
+9. **Post-Redirect-Get:** on success the page redirects to `upload.php?done=1`, which shows the number of photographs saved once.
+
+The accepted files of one submission are stored all together or not at all. A consent row is created only when at least one photograph is stored.
+Several visitors uploading at once is safe because names are random and unique (the `stored_filename` key is `UNIQUE`) and each request has its own transaction.
+
+**Status of new photographs:** `photos.status` starts as `active`. The schema defines `active` as "eligible for the slideshow", every stored photograph
+has an explicit consent record (the foreign key makes a photograph without one impossible), and the project has no approval step. No page shows photographs yet.
 
 ---
 
@@ -222,11 +324,11 @@ has its own transaction.
 
 ## 10. How returning visitors are handled (planned)
 
-1. The visitor enters their code; the application hashes it and looks up `visitors`.
+1. The visitor enters their code; the application hashes it (with `visitor_code_hash()`, the same function registration uses) and looks up `visitors`. *(Built in Step 4: `identify.php`.)*
 2. If found, the visitor's earlier photographs stay in place; new uploads are added alongside them.
-3. Before each new photo-upload session, the visitor is shown the public-display consent text and must
-   agree. The application creates a new `consents` row for that session, even when the consent text
-   version is unchanged. Every photograph in that upload session references that consent row.
+3. Every new upload session asks for consent again, even if the visitor consented earlier to the same
+   consent version. A new `consents` row is created for that session before any new photograph is accepted.
+   Earlier consent records, and the photographs that reference them, are left unchanged.
 4. The visitor's gallery is **paginated** using `id`-based paging.
 
 ---

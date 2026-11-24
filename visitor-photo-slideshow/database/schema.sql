@@ -1,4 +1,6 @@
 -- =============================================================================
+-- Visitor Photo Slideshow System - database schema (Step 1)
+-- =============================================================================
 -- Target : MySQL 8+ or compatible MariaDB (Windows XAMPP and Ubuntu).
 -- Import : into an ALREADY-CREATED, EMPTY database (see README.md).
 --          This file deliberately has no CREATE DATABASE / USE statement.
@@ -32,10 +34,14 @@ CREATE TABLE visitors (
 
 
 -- -----------------------------------------------------------------------------
--- consents: one visitor can have many consent records. Create a new record
--- for every photo-upload session, even when the consent text version is
--- unchanged. The non-unique visitor/version index supports lookups.
--- uq_consents_id_visitor exists so photos can reference (id, visitor_id)
+-- consents: one visitor can have many consent records. The application records
+-- a NEW consent row for every photo upload session, so the same visitor can
+-- have several rows with the SAME consent_version. There is deliberately NO
+-- unique key on (visitor_id, consent_version). consent_version says which
+-- consent text was agreed to; consented_at says when.
+-- idx_consents_visitor_version is an ordinary (non-unique) index. It supports
+-- the foreign key fk_consents_visitor and lookups of a visitor's consents.
+-- uq_consents_id_visitor exists so that photos can reference (id, visitor_id)
 -- together and the database guarantees a photo never points at another
 -- visitor's consent.
 -- -----------------------------------------------------------------------------
