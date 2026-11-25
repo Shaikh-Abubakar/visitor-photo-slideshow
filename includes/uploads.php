@@ -10,8 +10,8 @@ declare(strict_types=1);
  *   1. checks the number of files and, for each file, the PHP upload error, the size, the real
  *      content type (PHP Fileinfo), the file name extension and that the file is a real image;
  *   2. moves every accepted file into private storage under a random name;
- *   3. in ONE database transaction inserts a new consents row for this upload session and one
- *      photos row for every stored file;
+ *   3. in ONE database transaction inserts a public-display consent row only for a PUBLIC upload,
+ *      then inserts one photos row for every stored file; PRIVATE uploads have no public consent;
  *   4. on any failure rolls the transaction back AND deletes the files it just stored, because a
  *      database rollback does not remove files.
  *
@@ -30,6 +30,9 @@ if (!defined('APP_ROOT')) {
  * Change the number whenever the wording of upload_consent_text() changes.
  */
 const UPLOAD_CONSENT_VERSION = '1.0';
+
+/** Per-photo visibility choices. Private is the safe default. */
+const UPLOAD_VISIBILITIES = ['private', 'public'];
 
 /**
  * Initial value of photos.status. The independent approval_status starts as 'pending' for every
@@ -341,6 +344,11 @@ function upload_process(PDO $pdo, int $visitorId, array $files, string $storageD
     $requireUploaded = (bool) ($options['require_uploaded'] ?? true);
     $mover = $options['mover'] ?? 'move_uploaded_file';
     $nameGenerator = $options['name_generator'] ?? 'upload_random_filename';
+    $visibility = $options['visibility'] ?? 'private';
+    if (!is_string($visibility) || !in_array($visibility, UPLOAD_VISIBILITIES, true)) {
+        $result['error'] = 'Please choose whether these photographs are Private or Public.';
+        return $result;
+    }
 
     if (!class_exists('finfo')) {
         error_log('Photo upload: the PHP Fileinfo extension is not enabled.');
@@ -415,18 +423,22 @@ function upload_process(PDO $pdo, int $visitorId, array $files, string $storageD
             $pdo->beginTransaction();
         }
 
-        // One consent record for this upload session, then the photographs that refer to it.
-        $pdo->prepare('INSERT INTO consents (visitor_id, consent_version) VALUES (?, ?)')
-            ->execute([$visitorId, UPLOAD_CONSENT_VERSION]);
-        $consentId = (int) $pdo->lastInsertId();
+        // A public-display consent exists only when the visitor selected Public. A private photo
+        // has a NULL consent_id and can never pass the public slideshow visibility query.
+        $consentId = null;
+        if ($visibility === 'public') {
+            $pdo->prepare('INSERT INTO consents (visitor_id, consent_version) VALUES (?, ?)')
+                ->execute([$visitorId, UPLOAD_CONSENT_VERSION]);
+            $consentId = (int) $pdo->lastInsertId();
+        }
 
         $insert = $pdo->prepare(
-            'INSERT INTO photos (visitor_id, consent_id, stored_filename, original_filename, mime_type, file_size, status, approval_status) '
-            . 'VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+            'INSERT INTO photos (visitor_id, consent_id, visibility, stored_filename, original_filename, mime_type, file_size, status, approval_status) '
+            . 'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
         );
         foreach ($accepted as $file) {
             $insert->execute([
-                $visitorId, $consentId, $file['stored_name'], $file['original_name'],
+                $visitorId, $consentId, $visibility, $file['stored_name'], $file['original_name'],
                 $file['mime'], $file['size'], UPLOAD_INITIAL_STATUS, 'pending',
             ]);
         }

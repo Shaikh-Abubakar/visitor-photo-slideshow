@@ -1,7 +1,3 @@
--- =============================================================================
--- Visitor Photo Slideshow System - database schema (Step 1)
--- =============================================================================
--- Target : MySQL 8+ or compatible MariaDB (Windows XAMPP and Ubuntu).
 -- Import : into an ALREADY-CREATED, EMPTY database (see README.md).
 --          This file deliberately has no CREATE DATABASE / USE statement.
 -- Engine : InnoDB. Charset utf8mb4 with an explicit collation
@@ -67,9 +63,9 @@ CREATE TABLE consents (
 --   original_filename : what the visitor's device called it (display only)
 --   status            : 'active' = eligible for the slideshow,
 --                       'hidden' = kept but removed from the slideshow
---   consent_id        : NOT NULL, so a photo cannot exist without a consent
---   fk_photos_consent : composite key (consent_id, visitor_id) forces the
---                       consent to belong to the same visitor as the photo.
+--   consent_id        : NULL for Private photos; Public photos must reference consent
+--                       owned by the same visitor.
+--   visibility        : 'private' by default; only 'public' photos can reach the slideshow.
 --   Indexes           : InnoDB appends the primary key (id) to every secondary
 --                       index, so idx_photos_visitor is (visitor_id, id) and
 --                       idx_photos_status is (status, id). That serves the
@@ -82,13 +78,14 @@ CREATE TABLE consents (
 CREATE TABLE photos (
     id                 BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     visitor_id         BIGINT UNSIGNED NOT NULL,
-    consent_id         BIGINT UNSIGNED NOT NULL,
+    consent_id         BIGINT UNSIGNED NULL DEFAULT NULL,
     stored_filename    VARCHAR(64)     NOT NULL,
     original_filename  VARCHAR(255)    NOT NULL,
     mime_type          VARCHAR(50)     NOT NULL,
     file_size          INT UNSIGNED    NOT NULL,
     status             VARCHAR(20)     NOT NULL DEFAULT 'active',
     approval_status    VARCHAR(20)     NOT NULL DEFAULT 'pending',
+    visibility         VARCHAR(10)     NOT NULL DEFAULT 'private',
     uploaded_at        DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (id),
     UNIQUE KEY uq_photos_stored_filename (stored_filename),
@@ -97,6 +94,7 @@ CREATE TABLE photos (
     KEY idx_photos_status (status),
     CONSTRAINT chk_photos_status CHECK (status IN ('active', 'hidden')),
     CONSTRAINT chk_photos_approval CHECK (approval_status IN ('pending', 'approved', 'rejected')),
+    CONSTRAINT chk_photos_visibility CHECK (visibility IN ('private', 'public')),
     CONSTRAINT fk_photos_visitor
         FOREIGN KEY (visitor_id) REFERENCES visitors (id)
         ON DELETE RESTRICT ON UPDATE RESTRICT,

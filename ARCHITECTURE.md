@@ -294,7 +294,7 @@ photo.php?id=N   1 GET/HEAD only                              else 405
                  2 identified visitor (session)               else 401
                  3 id is a positive whole number              else 400
                  4 SELECT ... WHERE id = ? AND visitor_id = <session> AND status = 'active'
-                   INNER JOIN consents (same visitor)         else 404 (same answer as "not yours")
+                   Private OR Public with matching consent     else 404 (same answer as "not yours")
                  5 stored name has the generated shape; realpath() of the file lies INSIDE
                    realpath(UPLOAD_STORAGE_PATH); regular readable file   else 404
                  6 Fileinfo says JPEG/PNG/WebP and equals photos.mime_type   else 404
@@ -303,8 +303,7 @@ photo.php?id=N   1 GET/HEAD only                              else 405
 
 * **Ownership.** The visitor id is never read from the address or a form. The same `WHERE` clause that lists photographs also guards the
   image endpoint, so changing the number in `photo.php?id=N` cannot reach another visitor's photograph: the query finds nothing.
-* **Visibility.** Own, `status = 'active'` and a matching consent record (see `ASSUMPTIONS.md`, I1-I3). The schema has no field that separates
-  "visible in my own gallery" from "approved for the public slideshow"; the safest rule was used and no field was invented.
+* **Current visibility.** A visitor may see their own active Private photos without a public consent record, and their own active Public photos with a matching consent row. Public visibility alone is not enough for the shared slideshow: administrator approval and unwithdrawn public consent are also required. See Step 11 and `ASSUMPTIONS.md`.
 * **Path safety.** Three layers: the stored name must match `^[a-f0-9]{48}\.(jpg|png|webp)$` (so `..`, separators and `.php` cannot pass);
   `realpath()` resolves the file and any symbolic link; the result must start with the real storage folder plus a separator (so a sibling
   folder with a similar name does not pass; case-insensitive on Windows). Paths are never written to a page, a header or the error log.
@@ -346,14 +345,14 @@ has an explicit consent record (the foreign key makes a photograph without one i
 
 ## 9. Step 7: public slideshow (implemented)
 
-* `slideshow.php` reads a cursor (`after` photo ID) and selects the next eligible photo using a prepared keyset query (`p.id > cursor`, ascending, `LIMIT 1`); if none remains, it wraps to the first eligible photo. It fetches one row at a time and never loads the photo collection into PHP memory. A count query bounds skipping of unusable file records.
-* Public eligibility requires an existing `visitors` row, `photos.status = 'active'`, a matching consent row (`c.id = p.consent_id` and `c.visitor_id = p.visitor_id`), and `c.consent_version = '1.0'`, `c.withdrawn_at IS NULL`, `p.status = 'active'`, and `p.approval_status = 'approved'`. Consent, visitor visibility status, and administrator approval are independent gates. The screen viewer is public and does not need to register; the photo contributor must already be registered/identified to upload.
+* `slideshow.php` reads a cursor (`after` photo ID) and selects the next eligible photo using a prepared keyset query (`p.id > cursor`, ascending, `LIMIT 1`). The initial request starts at the oldest eligible photo; subsequent requests never wrap. When no later valid photo remains, the currently displayed final photo is revalidated and the page schedules the presentation-complete state. It fetches one row at a time and never loads the public photo collection into PHP memory.
+* Public eligibility requires an existing `visitors` row, `photos.visibility = 'public'`, `photos.status = 'active'`, a matching consent row (`c.id = p.consent_id` and `c.visitor_id = p.visitor_id`), and `c.consent_version = '1.0'`, `c.withdrawn_at IS NULL`, `p.status = 'active'`, and `p.approval_status = 'approved'`. Consent, visitor visibility status, and administrator approval are independent gates. The screen viewer is public and does not need to register; the photo contributor must already be registered/identified to upload.
 * `slideshow_photo.php` is a separate public image-serving endpoint. It rechecks public eligibility for every image request, then uses the Step 6 filename/path/MIME validation helpers before streaming from private storage. `photo.php` remains visitor-session/owner-only and is not weakened.
-* `SLIDESHOW_DEFAULT_DURATION_SECONDS` is validated by the centralized configuration loader (default 5 seconds; 2–3600). The page uses HTML meta refresh and the next ID cursor. Each full reload performs a new database lookup, which is also how new approvals are discovered. The empty state retries after 30 seconds.
-* The selected image is validated with PHP `getimagesize()`, then its original bytes are streamed from private storage. `slideshow.css` centers the image in a `100vw` × `100vh` stage and applies `max-width: 100vw`, `max-height: 100vh`, automatic dimensions and `object-fit: contain`. This adapts to the real browser viewport and avoids cropping/stretching. It does not force small sources to enlarge, so low-resolution uploads are not artificially upscaled; their own native detail still limits sharpness.
+* `SLIDESHOW_DEFAULT_DURATION_SECONDS` is validated by the centralized configuration loader (default 5 seconds); the page offers 5, 8, 10, 15 and 20 second choices and falls back to 5 if another value is configured. The page uses HTML meta refresh and the next ID cursor. Each full reload performs a new database lookup, which is also how new approvals are discovered. The empty state retries after 30 seconds.
+* The selected image is validated with PHP `getimagesize()`, then its original bytes are streamed from private storage. `slideshow.css` gives it the remaining viewport stage and applies automatic intrinsic dimensions, `max-width: 100%`, `max-height: 100%` and `object-fit: contain`. This adapts to the real browser viewport and avoids cropping/stretching. It does not force small sources to enlarge, so low-resolution uploads are not artificially upscaled; their own native detail still limits sharpness.
 * CSS is used only by the slideshow and is allowed by a narrow `style-src 'self'` CSP permission on that page. JavaScript remains blocked. No external package, CDN, or image processing library is used.
 * This is page-refresh progression, not true real-time push or uninterrupted animation. Network/server/image transfer time can extend the actual interval.
-* No schema migration was needed. The existing `photos.status` column and explicit consent version provide the available public eligibility rule. Unexpected statuses, including any manually introduced rejected/deleted-like value, do not match `active`; physical/database deletion removes the record.
+* Historical Step 7 note: at that stage no schema migration had been applied. Step 11 later adds `photos.visibility` and nullable `consent_id` through `database/step11_photo_visibility_migration.sql`. Unexpected statuses, including any manually introduced rejected/deleted-like value, do not match `active`; physical/database deletion removes the record.
 
 ## 10. How returning visitors are handled (implemented)
 
@@ -453,3 +452,40 @@ application paths have not been verified in this review because `pdo_mysql` and 
 MySQL/MariaDB service were unavailable. The current environment is not a Windows XAMPP
 or Ubuntu Apache deployment. See `TESTING_REPORT.md`; these limitations are intentional
 and must remain visible until target-environment tests are completed.
+
+
+## Per-photo visibility correction (2026-11-25)
+
+`photos.visibility` is either `private` or `public`, defaulting to `private`. A private photo has `consent_id = NULL`; only its identified owner may retrieve it through `photo.php`. A public photo must be linked to a consent belonging to the same visitor. The shared slideshow and its image endpoint additionally require `visibility='public'`, active status, administrator approval, the expected consent version and no withdrawal timestamp. The admin review queue contains Public photos only. The owner's gallery may list both visibility types and continues to show the owner's copy after public consent is withdrawn.
+
+Visitor names are not unique identity credentials. Registration checks for an existing name and warns the user, but never authenticates or merges based on a name. The original visitor code remains the only returning-visitor identification method.
+
+
+## Owner-only slideshow and display settings (November 25, 2026)
+
+`my_slideshow.php` is a protected visitor route. It requires the visitor identity from the existing PHP session, then closes the session lock before rendering so the browser can request image bytes and subsequent slides without serializing requests. `gallery_find_next_owner_slideshow_photo()` selects active photos owned by that visitor, including Private photos and the owner's Public photos that remain in the personal gallery. It validates the private-storage path, actual MIME type and image dimensions before returning an id. The image itself is served by the existing `photo.php` endpoint, which independently verifies that the current session owns the requested photo. The personal route does not use `slideshow_photo.php` and cannot make a private image available to the public.
+
+Successful uploads now render two primary next actions: play the personal slideshow or return to upload more photos. Returning-visitor welcome and gallery pages also link to the personal slideshow, so a visitor can replay photos from earlier visits after identifying with the original visitor code. The personal display includes all eligible active photos in that visitor's owner gallery, not only the latest upload batch.
+
+Both the public and personal slideshow expose a Settings control. Activating it navigates to the current photo in a paused state and opens a compact inline settings panel. The panel offers two still-photo transitions (Classic fade and Instant cut), five intervals (5, 8, 10, 15 and 20 seconds), and clearly states the image-fit and screen-mode behavior. Selecting a setting keeps the slideshow paused and preserves the current photo; Resume restarts it with the selected values. Settings do not automatically request fullscreen. This project keeps JavaScript blocked, so browser fullscreen is entered or exited manually with F11. Image rendering uses centered `object-fit: contain`; no cover/crop option is exposed.
+
+No schema migration is needed for this feature: the implementation uses the existing visitor, photo, consent, storage and settings tables.
+
+
+## 11. Step 13: return visitor auto-play and slide navigation
+
+A successful code match in `identify.php` immediately redirects into `my_slideshow.php?welcome=1`. The owner selector starts with the oldest valid active photo and advances by increasing photo id/upload order without wrapping. After the final active photo has remained on screen for the configured interval, an end-of-presentation overlay appears with Dashboard, Home and Replay actions. Previous navigation stops at the first photo rather than wrapping to the newest. Both selectors are limited to the authenticated visitor and the existing owner-gallery visibility policy. The image bytes continue to be served by `photo.php`, which independently checks ownership.
+
+The owner view provides Back to Dashboard, Stop Slideshow, Previous, Pause/Play, Next, a slide counter and Settings. The public display provides Previous and Stop/Home while continuing to require public consent, administrator approval, active status and no withdrawal. Soft Fade is the default entrance effect. JavaScript remains blocked, so timed advancement is server navigation rather than an in-page script-driven crossfade. No database migration is required.
+
+
+### Step 14 — finite, photo-first slideshow presentation
+
+The public and owner photo selectors now treat a presentation as a finite sequence. The initial request starts with the oldest eligible photo. Requests with an `after` cursor select only a greater eligible photo; they never fall back to the first photo. Previous-photo selection similarly does not wrap beyond the first slide. The page checks whether a valid next photo exists while rendering the current slide. If there is no next photo, the browser waits for the selected display interval and then opens a completion overlay on top of the revalidated final photo. The public completion overlay offers Home and Replay; the personal completion overlay offers Dashboard, Home and Replay. A manually selected Next action on the last slide reaches the same completion state.
+
+The presentation UI removes the animated video-style progress timeline and all camera-like zoom, pan, blur and reveal effects. The Settings panel now offers only Classic fade and Instant cut, with 5/8/10/15/20 second timing choices. The fade affects opacity only. No JavaScript, database migration, fullscreen API, or new media endpoint is introduced. Owner image requests continue to use `photo.php`; public image requests continue to use the public consent/approval-checking endpoint.
+
+
+### Step 15 — remove returning-visitor Play interstitial
+
+After a successful visitor-code match, `identify.php` creates the authenticated session and issues a 303 redirect directly to `my_slideshow.php?welcome=1`. The personal slideshow starts from the oldest active photo and advances automatically. There is no separate welcome page or Play button. If an already authenticated visitor opens `identify.php`, that route redirects them to the same personal slideshow. The owner-only photo endpoint and public consent/approval rules are unchanged. No database migration is needed.

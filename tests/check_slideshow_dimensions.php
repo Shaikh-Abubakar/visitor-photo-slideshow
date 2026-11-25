@@ -18,16 +18,16 @@ $checks = [
     'PHP rejects missing or invalid image dimensions' =>
         str_contains($helper, '(int) ($imageInfo[0] ?? 0) > 0')
         && str_contains($helper, '(int) ($imageInfo[1] ?? 0) > 0'),
-    'image width remains automatic to preserve its aspect ratio' =>
-        str_contains($css, 'width: auto;'),
-    'image height remains automatic to preserve its aspect ratio' =>
-        str_contains($css, 'height: auto;'),
-    'image is constrained to the viewport width' =>
-        str_contains($css, 'max-width: 100vw;'),
-    'image is constrained to the viewport height' =>
-        str_contains($css, 'max-height: 100vh;'),
+    'image element fills the stage dimensions' =>
+        str_contains($css, 'position: absolute;') && str_contains($css, 'inset: 0;') && str_contains($css, 'width: 100%;') && str_contains($css, 'height: 100%;'),
+    'stage itself fills the available viewport row' =>
+        str_contains($css, 'height: 100dvh;') && str_contains($css, 'grid-template-rows: auto minmax(0, 1fr) auto;'),
     'image is contained without cropping' =>
         str_contains($css, 'object-fit: contain;'),
+    'image keeps its original aspect ratio and is centered' =>
+        str_contains($css, 'object-position: center center;') && str_contains($css, 'object-fit: contain;'),
+    'stage and frame allow the image to shrink inside the viewport grid' =>
+        str_contains($css, '.slideshow-stage {') && str_contains($css, '.slideshow-frame {') && str_contains($css, 'min-height: 0;') && str_contains($css, 'grid-template-rows: auto minmax(0, 1fr) auto;'),
 ];
 
 $passed = 0;

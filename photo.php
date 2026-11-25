@@ -6,14 +6,16 @@ declare(strict_types=1);
  *
  *   GET photo.php?id=<photo number>
  *
- * Sends one photograph from private storage to the visitor who owns it, and to nobody else.
+ * Sends one photograph from private storage to the visitor who owns it, and to nobody else. This
+ * endpoint is for the owner gallery; Public slideshow photos use slideshow_photo.php.
  * Checks, in this order (the first failure ends the request with a short plain-text answer):
  *
  *   1. method is GET or HEAD                          else 405
  *   2. a visitor is identified (server-side session)  else 401   (no redirect: this is an image)
  *   3. the id is a positive whole number              else 400
- *   4. the photograph exists, belongs to THIS visitor, has status 'active' and a matching consent
- *      record (one prepared query)                    else 404   (same answer for "not yours")
+ *   4. the photograph exists, belongs to THIS visitor and has status 'active'; Private photos need
+ *      no public consent, while Public photos need a matching consent record (one prepared query)
+ *                                                   else 404   (same answer for "not yours")
  *   5. the stored name has the generated shape and the real file lies inside the private storage
  *      folder and exists                              else 404
  *   6. the real content of the file is JPEG, PNG or WebP and agrees with the database

@@ -122,7 +122,7 @@ try {
 $columns = $pdo->query(
     "SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'photos'"
 )->fetchAll(PDO::FETCH_COLUMN);
-$expected = ['id', 'visitor_id', 'consent_id', 'stored_filename', 'original_filename', 'mime_type', 'file_size', 'status', 'approval_status', 'uploaded_at'];
+$expected = ['id', 'visitor_id', 'consent_id', 'visibility', 'stored_filename', 'original_filename', 'mime_type', 'file_size', 'status', 'approval_status', 'uploaded_at'];
 check('photos has the columns the upload code uses', array_diff($expected, $columns) === []);
 $consentColumns = $pdo->query(
     "SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'consents'"
@@ -141,7 +141,7 @@ mkdir($storage, 0700, true);
 mkdir($source, 0700, true);
 check('a temporary private storage folder can be used', upload_storage_directory($storage) === $storage);
 
-$options = ['require_uploaded' => false, 'mover' => 'copy'];
+$options = ['require_uploaded' => false, 'mover' => 'copy', 'visibility' => 'public'];
 $photosBefore = count_rows($pdo, 'photos');
 $consentsBefore = count_rows($pdo, 'consents');
 $pdo->beginTransaction();
@@ -272,6 +272,14 @@ try {
         'name_generator' => static fn (string $extension): string => $fixedName,
     ]);
     check('13. when the second file cannot be stored, the first one is removed too', $clash['uploaded'] === 0 && $clash['technical'] === true && count_files($storage) === $filesBeforeFailure);
+
+    // 14. private uploads need no public consent and must store a NULL consent_id.
+    $consentsBeforePrivate = count_rows($pdo, 'consents');
+    $private = upload_process($pdo, $visitorId, [make_upload($source, 'private.png', $png)], $storage, array_merge($options, ['visibility' => 'private']));
+    $privateRow = $pdo->query('SELECT visibility, consent_id, approval_status FROM photos WHERE visitor_id = ' . (int) $visitorId . ' ORDER BY id DESC LIMIT 1')->fetch();
+    check('14. a Private photo can be uploaded without public-display consent', $private['uploaded'] === 1 && $private['error'] === null);
+    check('14. a Private photo is stored with visibility=private and no consent id', is_array($privateRow) && $privateRow['visibility'] === 'private' && $privateRow['consent_id'] === null);
+    check('14. Private upload does not create a public consent row', count_rows($pdo, 'consents') === $consentsBeforePrivate);
 } finally {
     if ($pdo->inTransaction()) {
         $pdo->rollBack();

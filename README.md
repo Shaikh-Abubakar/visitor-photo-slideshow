@@ -1,47 +1,58 @@
-# Quick start: Windows XAMPP
-
-For the corrected folder layout and complete XAMPP database setup, follow [SETUP_XAMPP.md](SETUP_XAMPP.md). The ZIP includes a local `.env` configured for the common XAMPP default (`root` with an empty MySQL password). If your MySQL root account has a password, update `DB_PASSWORD` in `.env`.
-
----
-
 # Visitor Photo Slideshow System
 
-A PHP and MySQL web application, built as College Assignment 1, that lets visitors upload photographs,
-record their consent, and have their photographs shown on a public slideshow.
+A PHP 8 and MySQL/MariaDB web application for collecting visitor photographs and presenting only eligible photographs on a public slideshow.
 
-> **Current status: Step 8 implemented in code (administrator dashboard); database/browser integration tests remain to be run.**
-> The folder structure, database schema, documentation, configuration loader, database connection, visitor registration
-> (`register.php`, Step 3), returning visitor identification (`identify.php`, Step 4), the photo upload page
-> (`upload.php`, Step 5) and the **visitor gallery** (`gallery.php` with the private image endpoint `photo.php`, Step 6) exist.
-> An identified visitor can upload photographs and later see all of their own photographs, including those from earlier visits. The public slideshow is implemented in Step 7 using HTML meta refresh.
-> **Not built yet:** administrator screens.
-> **Testing:** the Step 7 PHP syntax checks passed, but database-backed slideshow behavior and real-browser/XAMPP tests were not run in this environment. Earlier Step 1–6 test claims are historical; see `AI_LOG.md`.
+For Windows XAMPP installation, follow [SETUP_XAMPP.md](SETUP_XAMPP.md). The root page is `http://localhost/visitor-photo-slideshow/` after the folder is placed in `C:\xampp\htdocs`.
 
-------|--------|
-| Language | PHP 8.2 or newer (`pdo_mysql`, `fileinfo`, `mbstring`) |
+## Current implementation status
+
+- Visitor registration creates a one-time visitor code; only its one-way hash is stored.
+- Returning visitors identify themselves with that code and receive a private session.
+- Identified visitors can upload up to 10 photographs per submission, subject to configured per-file limits and image-type validation.
+- Public uploads require explicit public-display consent; Private uploads do not create a public consent record. Consent and administrator approval remain separate gates.
+- Visitors can view their own private gallery and withdraw public-display consent.
+- After upload, visitors can immediately choose to play their personal slideshow or upload more photos.
+- Returning visitors can replay all their active photos from earlier visits in an owner-only slideshow; Private photos never enter the shared/public display.
+- Administrators can sign in, view dashboard statistics, search visitors, review photographs, approve eligible photographs, and hide/reject photographs.
+- The public slideshow is accessible without visitor sign-in. It displays only active, approved photographs with matching, unwithdrawn public-display consent.
+- The slideshow settings button pauses the display and opens a compact settings panel for transition and slide duration; it does not activate browser fullscreen.
+- The project root now has a visitor landing page (`index.php`). Shared CSS styles the visitor, administrator and public slideshow pages.
+
+**Verification status:** PHP syntax, static source checks, CSS parsing, and browser layout checks are recorded in `TESTING_REPORT.md`. A live MySQL/MariaDB connection is not available in the current test environment, so database-backed workflows and actual slideshow rotation still require testing on the target XAMPP installation.
+
+## Technology and restrictions
+
+| Area | Implementation |
+|---|---|
+| Server-side language | PHP 8.2 or newer |
 | Database | MySQL 8+ or compatible MariaDB (InnoDB, utf8mb4) |
-| Database access | PDO with prepared statements |
-| Web server | Apache 2.4 (XAMPP on Windows, `apache2` on Ubuntu) |
-| Browser presentation | CSS is used only by the public slideshow; JavaScript is not used |
-| Not used | Frameworks, Composer packages, JavaScript, Node.js, Python |
+| Database access | PDO and prepared statements |
+| Web server | Apache 2.4 (XAMPP on Windows or Apache on Ubuntu) |
+| Presentation | Local HTML and custom CSS |
+| JavaScript | Not used |
+| Frameworks / packages | No Bootstrap, frontend framework, Composer package or Node.js dependency |
+| Upload storage | Private directory; configure `UPLOAD_STORAGE_PATH` outside the web root where possible |
 
-## Planned project modules
+## Main modules
 
 | Module | Purpose | Step |
-|--------|---------|------|
-| Foundation and database | Structure, schema, documentation | **1 (done)** |
-| Configuration and database connection | Read `.env`, connect with PDO | **2 (done)** |
-| Visitor registration and code | Create visitor, generate and hash code | **3 (done)** |
-| Returning visitor identification | Enter the visitor code, keep the identity in a secure session | **4 (written, not yet tested by anyone)** |
-| Consent and photo upload and storage | Consent record per upload session; validate, store privately, save metadata | **5 (written, not yet tested by anyone)** |
-| Visitor gallery | Returning visitors see their photographs (paginated) | **6 (implemented)** |
-| Public slideshow | Show explicitly consented, active photographs | **7 (implemented; database/browser tests pending)** |
-| Administration | Login, visitor and photo management, settings | planned |
+|---|---|---|
+| Foundation and database | Project structure, schema and documentation | 1 |
+| Configuration and database connection | Environment configuration and PDO connection | 2 |
+| Visitor registration | Create visitor and issue a secure visitor code | 3 |
+| Returning visitor identification | Verify visitor code and establish a session | 4 |
+| Consent and photo upload | Validate and privately store multiple photographs | 5 |
+| Visitor gallery and personal slideshow | Show and replay the signed-in visitor's own photographs from all visits | 6 |
+| Public slideshow | Display approved photographs with active public consent | 7 |
+| Administrator dashboard | Statistics, visitor search and photo moderation | 8 |
+| Privacy and security | Consent withdrawal, CSRF, sessions and private image access | 9 |
+| Testing and documentation | Regression tests, deployment checks and test report | 10 |
 
 ## Project structure
 
 ```
 visitor-photo-slideshow/
+├── index.php           visitor landing page and main navigation
 ├── config/
 │   ├── config.php     configuration loader (reads .env and environment variables)
 │   └── database.php   reusable PDO connection function
@@ -51,14 +62,18 @@ visitor-photo-slideshow/
 │   ├── visitors.php   name validation, visitor-code generation and hashing, insert (Step 3)
 │   ├── visitor_auth.php   code lookup, visitor session, logout, wrong-code throttle (Step 4)
 │   ├── uploads.php        upload validation, private storage, consent and photo records (Step 5)
-│   ├── gallery.php        gallery queries, visibility rule, number validation, safe file path (Step 6)
+│   ├── gallery.php        gallery queries, visibility rule, owner slideshow selection, safe file path (Step 6)
 │   └── slideshow.php      public slideshow selection and safe file checks (Step 7)
-├── admin/             administrator pages (empty for now)
+├── admin/             administrator login, dashboard, visitor directory and photo review
+├── assets/css/        shared visitor/admin design system
 ├── database/
 │   └── schema.sql     database tables
 ├── storage/
-│   └── uploads/       private photograph storage (normally excluded from version control; this supplied ZIP contains nine small sample PNGs)
+│   └── uploads/       private photograph storage (empty in the delivery ZIP; keep your local uploads)
 ├── tests/
+│   ├── check_project_entry_ui.php  root landing page and navigation checks
+│   ├── check_responsive_ui.php  responsive CSS and no-JavaScript checks
+│   ├── check_admin_ui.php  administrator UI/security source checks
 │   ├── check_slideshow_rendering.php  static CSS and eligibility checks (Step 7)
 │   ├── check_database.php   command-line check of the configuration and database
 │   ├── check_identify.php   command-line check of the Step 4 lookup and throttle (changes nothing)
@@ -70,6 +85,7 @@ visitor-photo-slideshow/
 ├── gallery.php        visitor photo gallery (Step 6)
 ├── photo.php          private image endpoint: sends one photograph to its owner (Step 6)
 ├── slideshow.php      public one-photo-at-a-time slideshow page (Step 7)
+├── my_slideshow.php   owner-only slideshow that replays photos across visits
 ├── slideshow.css      responsive TV/computer display styling (Step 7)
 ├── slideshow_photo.php public image endpoint; rechecks consent and private storage (Step 7)
 ├── .env.example       configuration template (placeholders only)
@@ -81,6 +97,12 @@ visitor-photo-slideshow/
 ```
 
 `.htaccess` files in `config/`, `includes/`, `database/`, `storage/` and `tests/` deny direct web access.
+
+### Upload completion and returning-visitor playback
+
+After a successful upload, the result page offers **Play my photo slideshow** and **Upload more photos**. The personal slideshow combines the visitor's new and previous active photos from all visits. It is protected by the existing visitor-code session and every image is still served through `photo.php`, which verifies ownership for each image request. This owner-only slideshow may include Private photos and Public photos retained in the owner's gallery (including photos whose public consent was later withdrawn). It does not publish those images.
+
+The separate shared slideshow remains public and only displays active Public photos with matching valid consent and administrator approval. The Settings button opens a compact panel after pausing the presentation; available transitions are Classic fade and Instant cut, with intervals of 5, 8, 10, 15 and 20 seconds. The presentation no longer loops: after the final eligible photo has been displayed for its selected interval, a completion panel offers Home and Replay. Image fit remains **contain** to preserve the full photograph. The page does not force fullscreen. Use the browser's F11 key to enter or leave fullscreen manually.
 
 ## Requirements
 
@@ -531,7 +553,7 @@ Ubuntu-specific problems:
 
 A first-time visitor opens `register.php`, types a name and presses **Register**. The system creates a
 unique **visitor code**, stores only a one-way hash of it, and shows the code once so the visitor can save it
-for future visits. (Recognising a returning visitor by that code is a later step and is **not built yet**.)
+for future visits. Returning-visitor identification is implemented in Step 4.
 
 | Platform | Address of the page |
 |----------|---------------------|
@@ -542,7 +564,7 @@ for future visits. (Recognising a returning visitor by that code is a later step
 
 | File | Purpose |
 |------|---------|
-| `register.php` | The page: form, result, request handling. All HTML is written by PHP; there is no CSS and no JavaScript. |
+| `register.php` | The page: form, result, request handling. HTML is generated by PHP and styled with the shared local stylesheet; JavaScript is not used. |
 | `includes/security.php` | Secure session start, CSRF token, security headers, `html_escape()` (a wrapper around `htmlspecialchars()`). |
 | `includes/visitors.php` | Name validation, visitor-code generation, hashing, and the database insert with collision retry. |
 
@@ -661,7 +683,7 @@ Step 3 stores a plain SHA-256 hash, as the Step 3 brief asks (see `ASSUMPTIONS.m
 
 A visitor who registered earlier opens `identify.php`, types the visitor code received at registration and
 presses **Identify me**. If the code is right, the system finds the **existing** visitor row, remembers who the visitor
-is in a secure PHP session and shows a welcome message. **No new visitor and no new code is ever created here.**
+is in a secure PHP session and is redirected straight into the visitor's personal slideshow. There is no extra Play confirmation. **No new visitor and no new code is ever created here.**
 
 | Platform | Address of the page |
 |----------|---------------------|
@@ -672,7 +694,7 @@ is in a secure PHP session and shows a welcome message. **No new visitor and no 
 
 | File | Purpose |
 |------|---------|
-| `identify.php` | The page: form, request handling, welcome page, "End my session" button. All HTML is written by PHP; there is no CSS and no JavaScript. |
+| `identify.php` | The page: identification form, request handling and direct redirect into the personal slideshow after successful verification. An already authenticated visitor is also redirected to their slideshow instead of seeing a Play prompt. HTML is generated by PHP and styled with the shared local stylesheet; JavaScript is not used. |
 | `includes/visitor_auth.php` | Reusable helper: `visitor_find_by_code()`, `visitor_login()`, `visitor_current()`, `visitor_is_authenticated()`, `visitor_require_login()`, `visitor_logout()` and the wrong-code throttle. |
 | `tests/check_identify.php` | Command-line check of the lookup and throttle logic. It runs inside a database transaction that is rolled back, so it leaves no visitor behind. |
 
@@ -689,9 +711,9 @@ use only the ones in `includes/`.)
 4. The submitted code is checked for shape (after removing hyphens and spaces and making capitals: exactly 32 characters from `A-Z` and `2-7`, the format of Step 3).
 5. PHP computes the **SHA-256 hash** with `visitor_code_hash()` from Step 3 (the same function that stored it, so letter case, hyphens and spaces do not matter) and a **prepared statement** looks for that hash in `visitors.visitor_code_hash`: `SELECT id, name FROM visitors WHERE visitor_code_hash = ? LIMIT 1`. Only the hash is sent to the database. The database never holds, and is never compared with, the code itself.
 6. **No match** (unknown code, wrong shape, missing field): the wrong attempt is counted, and the browser is redirected to `identify.php`, which shows one neutral sentence: "That visitor code was not recognised." It never says whether a name or account exists.
-7. **Match:** the session id is **replaced** (`session_regenerate_id(true)`, against session fixation), the visitor's database `id`, `name` and the time are stored in the session, the CSRF token is replaced, and the browser is redirected (HTTP 303) to `identify.php?identified=1` (**Post-Redirect-Get**).
-8. The welcome page shows the name and the visitor number from the session. **Refreshing it only repeats a `GET`**: it creates no record and asks for nothing.
-9. **End my session** (a `POST` with a CSRF token) empties the whole session and replaces the session id.
+7. **Match:** the session id is **replaced** (`session_regenerate_id(true)`, against session fixation), the visitor's database `id`, `name` and the time are stored in the session, the CSRF token is replaced, and the browser is redirected (HTTP 303) directly to `my_slideshow.php?welcome=1` (**Post-Redirect-Get**). The first active owner photo starts automatically; no Play confirmation is shown.
+8. If an already authenticated visitor opens `identify.php` again (including through an old bookmark or browser navigation), the page redirects straight to the personal slideshow rather than showing a welcome/Play interstitial.
+9. **End my session** is available in the visitor area and ends the authenticated session using the existing logout action.
 
 The session holds only `id`, `name` and the time of identification. It never holds the visitor code or the hash. An identification
 lasts 2 hours (`VISITOR_SESSION_LIFETIME_SECONDS` in `includes/visitor_auth.php`), then the code must be entered again.
@@ -823,7 +845,7 @@ new consent record. A visitor who is not identified is sent to `identify.php` an
 
 | File | Purpose |
 |------|---------|
-| `upload.php` (new) | The page: login check, form, request handling, result. All HTML is written by PHP; no CSS, no JavaScript. |
+| `upload.php` (new) | The page: login check, form, request handling, result. HTML is generated by PHP and styled with the shared local stylesheet; JavaScript is not used. |
 | `includes/uploads.php` (new) | All upload logic: validation, random names, private storage, consent and photo records, clean-up after a failure. No HTML. |
 | `tests/check_upload.php` (new) | Command-line check of the upload logic. Changes nothing (transaction rolled back, temporary folder deleted). |
 | `config/config.php` (changed) | Reads the new setting `UPLOAD_ALLOWED_MIME_TYPES` (before Step 5 it was listed but not read). Nothing else changed. |
@@ -994,7 +1016,7 @@ The images are not public files: each one is loaded through `photo.php`, which c
 
 | File | Purpose |
 |------|---------|
-| `gallery.php` (new) | The page: login check, list, pagination links, upload link, "End my session" button. All HTML is written by PHP; no CSS, no JavaScript. |
+| `gallery.php` (new) | The page: login check, list, pagination links, upload link, "End my session" button. HTML is generated by PHP and styled with the shared local stylesheet; JavaScript is not used. |
 | `photo.php` (new) | `photo.php?id=N`: sends one photograph to its owner (see below). |
 | `includes/gallery.php` (new) | The visibility rule as SQL, number and page validation, safe file-path resolution, file-type detection. No HTML. |
 | `tests/check_gallery.php` (new) | Command-line check of the gallery logic. Changes nothing (transaction rolled back, temporary folder deleted). |
@@ -1015,12 +1037,12 @@ The images are not public files: each one is loaded through `photo.php`, which c
 
 ### Which photographs are shown (visibility and consent)
 
-A photograph is listed and served only when **all three** are true: it belongs to the identified visitor, its `status` is `active`, and a `consents` row exists for it
-(`photos.consent_id` pointing at a consent of the same visitor). `hidden` photographs are never shown. Consent records are never changed.
+A photograph is listed and served when it belongs to the identified visitor and `status` is `active`, and then it passes the matching visibility rule:
 
-**Limitation (no field was invented).** The schema has only the statuses `active` and `hidden`, and no field that separates "this visitor may see their own photograph"
-from "approved for the public slideshow". Uploaded does **not** mean approved, so the gallery applies the stricter slideshow rule. Consequences: a visitor cannot see their own
-`hidden` photographs, there is no `deleted` or `rejected` status to filter, and an old consent text version stays valid. See `ASSUMPTIONS.md`, section I.
+- `private`: it has `photos.visibility = 'private'` and does not require a public-display consent record;
+- `public`: it has `photos.visibility = 'public'` and a consent row linked to the same visitor. If that consent is withdrawn, the owner may still see their own copy, but the public slideshow may not.
+
+`hidden` photographs are never shown in the owner's gallery. Public visibility is not a promise of immediate public display: the slideshow additionally requires active status, administrator approval, the current public-consent version and no withdrawal.
 
 ### How private photographs are displayed (`photo.php`)
 
@@ -1031,7 +1053,7 @@ from "approved for the public slideshow". Uploaded does **not** mean approved, s
 | Method is GET or HEAD | 405 |
 | A visitor is identified (session) | 401 (no redirect: the answer is an image) |
 | `id` is a positive whole number | 400 |
-| The photograph exists, belongs to **this** visitor, is `active` and has its consent record | 404 (the same answer as "does not exist") |
+| The photograph exists, belongs to **this** visitor and is `active`; Private needs no consent, Public needs a matching consent record | 404 (the same answer as "does not exist") |
 | The stored name has the generated shape (48 hex characters + `jpg`/`png`/`webp`) and the real file lies inside the private storage folder (`realpath()`, symbolic links resolved) | 404 |
 | The real file content (PHP Fileinfo) is JPEG, PNG or WebP and equals the type in the database | 404 |
 
@@ -1221,7 +1243,7 @@ SELECT p.id, p.visitor_id, p.status, c.consent_version
 FROM photos p
 INNER JOIN visitors v ON v.id = p.visitor_id
 INNER JOIN consents c ON c.id = p.consent_id AND c.visitor_id = p.visitor_id
-WHERE p.status = 'active' AND c.consent_version = '1.0'
+WHERE p.visibility = 'public' AND p.status = 'active' AND p.approval_status = 'approved' AND c.consent_version = '1.0' AND c.withdrawn_at IS NULL
 ORDER BY p.id;
 ```
 
@@ -1229,35 +1251,35 @@ Private upload files are not included in the submission archive. Existing local 
 
 ## Selection and consent rule
 
-The slideshow reads one record at a time from `photos`, joined to `visitors` (so the visitor registration row must exist) and to `consents` on both `consent_id` and `visitor_id`. It includes only `photos.status = 'active'` and `consents.consent_version = '1.0'`. Version `1.0` is the current upload consent wording in `includes/uploads.php`, which explicitly says the uploaded photographs may be shown publicly on the slideshow screen. A future change to that wording must be reviewed deliberately: update the accepted public-consent version only after deciding whether old consent remains valid.
+The slideshow reads one record at a time from `photos`, joined to `visitors` and `consents` on both `consent_id` and `visitor_id`. It includes only `photos.visibility = 'public'`, `photos.status = 'active'`, `photos.approval_status = 'approved'`, `consents.consent_version = '1.0'`, and `consents.withdrawn_at IS NULL`. Version `1.0` is the current upload consent wording in `includes/uploads.php`, which explicitly says the uploaded photographs may be shown publicly on the slideshow screen. A future change to that wording must be reviewed deliberately: update the accepted public-consent version only after deciding whether old consent remains valid.
 
 Public eligibility requires all of the following: an existing visitor row; `photos.status = 'active'`; `photos.approval_status = 'approved'`; a matching consent row for the same visitor; consent version `1.0`; and `consents.withdrawn_at IS NULL`. Pending and rejected photos are not public. Hidden photos are not public. The owner-only `photo.php` endpoint is unchanged. Public images are sent by the separate `slideshow_photo.php`, which rechecks eligibility, verifies the generated storage filename, resolves the real file inside private storage, checks its actual MIME type against the database and streams it with safe headers.
 
 ## Automatic progression and discovery
 
-`slideshow.php` fetches the next eligible photo by ID (one metadata row at a time). When there is no larger eligible ID, it wraps to the first eligible photo. The browser's standard HTML meta refresh reloads the page after the configured display duration and passes the last photo ID as a cursor. Each page request performs a fresh database lookup, so newly uploaded and approved records can enter the sequence without restarting the browser. Newly activated older IDs appear when the sequence wraps. If the current photo is hidden or deleted before the next request, the next query simply moves on.
+`slideshow.php` fetches the next eligible photo by ID (one metadata row at a time). The first request starts at the oldest eligible photo; later requests only select greater IDs and never wrap. The browser's standard HTML meta refresh reloads the page after the configured display duration and passes the last photo ID as a cursor. When no next eligible image remains, the final image is revalidated and a completion overlay offers Home and Replay instead of looping. Each page request performs a fresh database lookup. If the current photo is hidden or deleted before the next request, the next query moves on to another eligible photo or the completion state.
 
 Advancing means selecting the next eligible ID and rendering its page. Refreshing the eligible list means querying MySQL again; this implementation does that on every advancement/reload, rather than keeping a cached in-memory list. The empty state checks again after 30 seconds. Missing or invalid physical files are skipped, with only the photo ID logged.
 
 ## Configure display duration
 
-In `.env`, set `SLIDESHOW_DEFAULT_DURATION_SECONDS=5`. The default is 5 seconds; allowed values are 2 through 3600 seconds. The setting is validated by `config/config.php`. No administrator settings page or `settings` table management is added in Step 7.
+In `.env`, set `SLIDESHOW_DEFAULT_DURATION_SECONDS=5`. The public page starts at 5 seconds. Its selectable values are 5, 8, 10, 15 and 20 seconds; a configured value outside those choices falls back to 5 seconds. No administrator settings page or `settings` table management is added in Step 7.
 
 ## Full-photo rendering and display size
 
-`slideshow.css` uses the actual browser viewport (`100vw` × `100vh`) and centers the original photo on a black background. The image is constrained by `max-width: 100vw` and `max-height: 100vh`, uses automatic width/height and `object-fit: contain`, so a large landscape or portrait photograph shrinks to fit the entire screen without cropping or stretching. The page does not depend on a fixed 1920 × 1080 canvas; it adapts to the TV/computer browser window and browser zoom.
+`slideshow.css` gives the photo a stage that fills the space between the header and controls. The image element fills the available stage box and uses `object-fit: contain`, so landscape and portrait photographs scale proportionally to the largest size that fits without cropping or stretching. Source resolution still determines sharpness. The page does not depend on a fixed 1920 × 1080 canvas; it adapts to the TV/computer browser window and browser zoom.
 
 The stylesheet deliberately does not force small images to enlarge. This avoids making low-resolution source files look even softer through artificial enlargement. If a small photo does not fill the screen, that is because its original pixel dimensions are smaller than the display area; CSS cannot create missing image detail. Use the original high-resolution photograph for the sharpest result. The upload pipeline stores the accepted original file and the slideshow endpoint streams those original bytes without generating a compressed preview or thumbnail. The CSS only scales large originals down to fit the viewport; it does not crop the photo.
 
-CSS is permitted for the slideshow only. The slideshow CSP allows its own same-origin stylesheet and image endpoint; JavaScript remains blocked and is not used.
+The visitor, administrator and public slideshow interfaces use local custom CSS. The content security policy permits only same-origin stylesheets and the specific same-origin image resources required by each page; JavaScript remains blocked and is not used.
 
 ## PHP/browser limitation
 
 This is not true real-time push, uninterrupted animation or a client-side slideshow. Each advance is a complete HTTP page request and reload controlled by the browser's HTML meta-refresh support. A slow network, server, database or image transfer can delay the next photograph; a browser may also restrict automatic refresh in some kiosk/power-saving configurations. Newly approved images are discovered at the next database lookup, not pushed immediately.
 
-## Step 7 verification record
+## Step 7 verification record (historical)
 
-Run the static slideshow rendering/eligibility check from the project folder with `php tests/check_slideshow_rendering.php`; it does not require a database. It checks that the CSS fits the browser viewport without forced upscaling or cropping and that selection/serving queries require an existing visitor row, matching consent, and active photo status.
+The original Step 7 record below describes the implementation-stage checks. For the current visitor/admin visual system and latest test outcomes, see `TESTING_REPORT.md`. Run the static slideshow rendering/eligibility check from the project folder with `php tests/check_slideshow_rendering.php`; it does not require a database. It checks that the CSS fits the browser viewport without forced upscaling or cropping and that selection/serving queries require an existing visitor row, matching consent, and active photo status.
 
 For this correction, `php -l` reported no syntax errors in all 23 PHP files, and `php tests/check_slideshow_rendering.php` passed all 11 static rendering/eligibility checks. `getimagesize()` was also run against the nine private PNG files bundled in the ZIP; their source dimensions range from 191×178 to 337×226 pixels. A MySQL/MariaDB service and real browser/XAMPP session were not available in this environment, so database-backed selection, consent filtering against live rows, automatic browser progression, and visual TV rendering were **not executed**. The CSS behavior must still be visually confirmed in the target browser/display. Do not mark database, browser, cycling, missing-file or Steps 1–6 regression tests as passed until you execute them against your configured database and browser. Earlier Step 1–6 test claims above are historical records from the supplied project documentation, not tests rerun during this correction.
 
@@ -1345,3 +1367,34 @@ The submission copy deliberately excludes `.env` and every private file under
 `storage/uploads/`; it keeps `.env.example` and `storage/uploads/.gitkeep`. Copy `.env.example`
 to `.env` and configure your own database credentials and private upload directory before use.
 See `TESTING_REPORT.md` for the exact checks, outcomes, and remaining work.
+
+
+## Per-photo privacy and duplicate-name correction (2026-11-25)
+
+The upload form now asks for **Private** or **Public** for each upload batch. Private is selected by default. Private photos require no public-display consent, receive no consent row, remain visible to the identified owner in `gallery.php`, and are never included in the public slideshow or the administrator's public-review queue. Public photos require the public-display consent checkbox and then remain pending until an administrator approves them. Only approved, active, non-withdrawn Public photos appear for every visitor at `slideshow.php`.
+
+For an existing database, back up the database first, then import `database/step11_photo_visibility_migration.sql` once into the existing project database using phpMyAdmin. Do not drop or recreate your database. The migration adds `photos.visibility`, makes `photos.consent_id` nullable for new private photos, and preserves previous photos as Public only when they still have matching, non-withdrawn consent version `1.0`. Existing rows with withdrawn or missing consent remain Private. The application code expects this migration to be complete before the updated upload page is used.
+
+Registration now warns when a matching name already exists. It does not merge or sign in by name because different people can share a name. Returning visitors must use their original visitor code; a different person with the same name can confirm that they are new and receive a separate code.
+
+The public slideshow defaults to **5 seconds**. The supported display choices are 5, 8, 10, 15 and 20 seconds. When updating an existing installation, check the existing `.env`: change `SLIDESHOW_DEFAULT_DURATION_SECONDS=10` to `SLIDESHOW_DEFAULT_DURATION_SECONDS=5` if you previously set it to 10. The update archive does not replace your `.env`. The image element fills the available stage box and uses `object-fit: contain`, preserving the full aspect ratio without cropping or stretching. A low-resolution original may look soft when displayed very large; use the original, highest-resolution photograph for a sharper result.
+
+
+### Step 11: verify identity, privacy and display changes
+
+Run these database-independent checks from the project directory:
+
+```text
+php tests/check_visibility_workflow.php
+php tests/check_slideshow_rendering.php
+php tests/check_slideshow_dimensions.php
+```
+
+The upload visibility selector applies to every file in the same submission. To give different photos different visibility, submit them in separate uploads. A matching visitor name triggers a warning only; it cannot safely prove identity. Use the original visitor code to return to the existing account.
+
+
+## Step 13 — complete returning-visitor slideshow flow
+
+After a returning visitor enters a valid original visitor code, the system starts their personal slideshow automatically. The earliest active photo appears first, followed by the rest of the owner's previous photos in upload order. Previous and Next buttons navigate through the owner's collection without wrapping. After the final photo interval, a completion overlay offers Dashboard, Home and Replay actions. The public slideshow has Previous and Stop/Home controls and a Home/Replay completion overlay. Classic fade is the default; Instant cut is also available in Settings. The animated progress timeline and zoom/pan/blur treatments are not used, keeping the display focused on still photographs.
+
+The project continues to block JavaScript. Timed advance is server-rendered navigation; each new slide enters with the selected CSS effect. No database migration is required. Run `php tests/check_step13_slide_flow.php` and `php tests/check_returning_personal_slideshow.php`. Database-dependent and browser/TV tests must be run on the target XAMPP machine.

@@ -11,7 +11,7 @@ require_once __DIR__ . DIRECTORY_SEPARATOR . 'includes' . DIRECTORY_SEPARATOR . 
 require_once __DIR__ . DIRECTORY_SEPARATOR . 'includes' . DIRECTORY_SEPARATOR . 'visitor_auth.php';
 
 session_start_secure();
-send_security_headers();
+send_security_headers(false, true);
 header('Content-Type: text/html; charset=utf-8');
 $visitor = visitor_require_login('identify.php');
 $message = '';
@@ -50,7 +50,8 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
     exit('Method not allowed.');
 }
 
-echo '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Privacy controls</title></head><body>';
+echo '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="assets/css/style.css?v=9"><title>Privacy controls</title></head><body class="app-body">';
+echo '<div class="app-site-shell"><header class="app-header"><p class="app-brand">' . html_escape((string) app_config('APP_NAME')) . '</p><span class="app-header-tag">Privacy</span></header><main class="app-main">';
 echo '<h1>Privacy controls</h1>';
 echo '<p>Signed in as ' . html_escape($visitor['name']) . '.</p>';
 if ($message !== '') {
@@ -59,4 +60,4 @@ if ($message !== '') {
 echo '<p>Withdrawing consent removes all photographs from your public slideshow immediately. Your private gallery remains available to you. The consent history is retained with a withdrawal timestamp.</p>';
 echo '<form method="post"><input type="hidden" name="csrf_token" value="' . html_escape(csrf_token()) . '"><button type="submit">Withdraw public-display consent</button></form>';
 echo '<p><a href="gallery.php">Return to my gallery</a></p>';
-echo '</body></html>';
+echo '</main></div></body></html>';

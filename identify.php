@@ -5,18 +5,17 @@ declare(strict_types=1);
  * Returning visitor identification page (Step 4).
  *
  * What happens here
- *   GET   identify.php                  the form (or, for an identified visitor, who they are)
- *   POST  identify.php  (identify)      check the visitor code, then REDIRECT (Post-Redirect-Get):
- *                                         right code -> identify.php?identified=1  (welcome page)
+ *   GET   identify.php                  the form; an already identified visitor goes straight to their slideshow
+ *   POST  identify.php  (identify)      verify the code, establish the session, then redirect directly to my_slideshow.php
  *                                         wrong code -> identify.php               (message from the session)
- *   GET   identify.php?identified=1     the welcome page, shown from the session
  *   POST  identify.php  (logout)        ends the visitor session
  *
  * The submitted code is hashed with the Step 3 rule (visitor_code_hash) and only the hash is
  * looked up in visitors.visitor_code_hash. The code is never stored, never put back into the page
  * and never written to the session. No new visitor and no new code is ever created here.
  *
- * This file builds all its HTML with PHP. There is no CSS and no JavaScript.
+ * A valid visitor never sees a separate welcome/Play interstitial: identification starts their
+ * personal slideshow directly. The page uses the shared same-origin stylesheet and no JavaScript.
  */
 
 require_once __DIR__ . DIRECTORY_SEPARATOR . 'includes' . DIRECTORY_SEPARATOR . 'bootstrap.php';
@@ -26,7 +25,6 @@ require_once __DIR__ . DIRECTORY_SEPARATOR . 'includes' . DIRECTORY_SEPARATOR . 
 
 /** Relative addresses: they work in a sub-folder (XAMPP) and at the site root (Ubuntu). */
 const IDENTIFY_PAGE = 'identify.php';
-const IDENTIFY_RESULT_PAGE = 'identify.php?identified=1';
 const IDENTIFY_REGISTER_PAGE = 'register.php';
 
 /** First part of every page. Sends the HTTP status and the start of the HTML. */
@@ -38,14 +36,20 @@ function identify_page_start(string $title, int $status): void
     echo '<html lang="en">' . "\n";
     echo '<head>' . "\n";
     echo '<meta charset="utf-8">' . "\n";
+    echo '<meta name="viewport" content="width=device-width, initial-scale=1">' . "\n";
+    echo '<link rel="stylesheet" href="assets/css/style.css?v=9">' . "\n";
     echo '<title>' . html_escape($title) . '</title>' . "\n";
     echo '</head>' . "\n";
-    echo '<body>' . "\n";
-    echo '<h1>' . html_escape((string) app_config('APP_NAME')) . '</h1>' . "\n";
+    echo '<body class="app-body">' . "\n";
+    echo '<div class="app-site-shell">' . "\n";
+    echo '<header class="app-header"><p class="app-brand">' . html_escape((string) app_config('APP_NAME')) . '</p><span class="app-header-tag">Visitor Photo Slideshow</span></header>' . "\n";
+    echo '<main class="app-main auth-page auth-page--identify">' . "\n";
 }
 
 function identify_page_end(): void
 {
+    echo '</main>' . "\n";
+    echo '</div>' . "\n";
     echo '</body>' . "\n";
     echo '</html>' . "\n";
 }
@@ -55,48 +59,39 @@ function identify_render_form(?string $message, int $status): void
 {
     identify_page_start('Visitor identification', $status);
 
-    echo '<h2>Returning visitor</h2>' . "\n";
-    echo '<p>Already registered? Enter your visitor code to identify yourself. '
-        . 'You can type it in any letter case, with or without the hyphens.</p>' . "\n";
+    echo '<section class="auth-shell" aria-labelledby="identification-title">' . "\n";
+    echo '<div class="auth-heading">' . "\n";
+    echo '<span class="auth-eyebrow">Good to see you again</span>' . "\n";
+    echo '<h1 class="page-title" id="identification-title">Welcome Back</h1>' . "\n";
+    echo '<p class="page-subtitle">Enter the visitor code you received when you registered. We will use it to securely find your visitor profile and photographs.</p>' . "\n";
+    echo '</div>' . "\n";
+
+    echo '<section class="auth-card" aria-label="Returning visitor identification form">' . "\n";
+    echo '<div class="auth-card-heading"><span class="auth-card-icon auth-card-icon--return" aria-hidden="true">↗</span><div><h2 class="section-title">Identify your visit</h2><p class="auth-card-description">Your visitor code is the only information needed here.</p></div></div>' . "\n";
 
     if ($message !== null) {
-        echo '<p><strong>' . html_escape($message) . '</strong></p>' . "\n";
+        $messageIsNotice = $message === 'Your session has ended.';
+        $messageClass = $messageIsNotice ? 'alert-info' : 'alert-error';
+        $messageRole = $messageIsNotice ? 'status' : 'alert';
+        echo '<div class="' . $messageClass . ' auth-alert" role="' . $messageRole . '">'
+            . html_escape($message) . '</div>' . "\n";
     }
 
-    echo '<form method="post" action="' . html_escape(IDENTIFY_PAGE) . '" autocomplete="off">' . "\n";
+    echo '<form class="auth-form" method="post" action="' . html_escape(IDENTIFY_PAGE) . '" autocomplete="off">' . "\n";
     echo '<input type="hidden" name="csrf_token" value="' . html_escape(csrf_token()) . '">' . "\n";
     echo '<input type="hidden" name="action" value="identify">' . "\n";
-    echo '<p><label for="visitor_code">Your visitor code</label><br>' . "\n";
-    echo '<input type="text" id="visitor_code" name="visitor_code" value="" maxlength="64" '
-        . 'autocomplete="off" autocapitalize="characters" spellcheck="false"></p>' . "\n";
-    echo '<p><button type="submit">Identify me</button></p>' . "\n";
+    echo '<div class="form-field">' . "\n";
+    echo '<label class="form-label" for="visitor_code">Your visitor code <span class="required-indicator" aria-hidden="true">*</span></label>' . "\n";
+    echo '<input type="text" id="visitor_code" name="visitor_code" value="" maxlength="64" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="Enter your visitor code" required aria-required="true">' . "\n";
+    echo '<small class="form-help">You can enter the code with or without hyphens, and in upper- or lower-case letters.</small>' . "\n";
+    echo '</div>' . "\n";
+    echo '<button class="auth-submit" type="submit">Identify and continue <span aria-hidden="true">→</span></button>' . "\n";
     echo '</form>' . "\n";
 
-    echo '<p>First visit? <a href="' . html_escape(IDENTIFY_REGISTER_PAGE) . '">Register here</a>.</p>' . "\n";
-
-    identify_page_end();
-}
-
-/** Shows the success message for an identified visitor, with the button that ends the session. */
-function identify_render_welcome(array $visitor, bool $justIdentified): void
-{
-    identify_page_start('Visitor identified', 200);
-
-    if ($justIdentified) {
-        echo '<h2>Welcome back, ' . html_escape($visitor['name']) . '!</h2>' . "\n";
-        echo '<p>You have been identified successfully. No new registration was made.</p>' . "\n";
-    } else {
-        echo '<h2>You are identified</h2>' . "\n";
-        echo '<p>You are identified as ' . html_escape($visitor['name']) . '.</p>' . "\n";
-    }
-    echo '<p>Visitor number: ' . html_escape((string) $visitor['id']) . '</p>' . "\n";
-    echo '<p><a href="upload.php">Upload photographs</a> | <a href="gallery.php">View my photographs</a></p>' . "\n";
-
-    echo '<form method="post" action="' . html_escape(IDENTIFY_PAGE) . '">' . "\n";
-    echo '<input type="hidden" name="csrf_token" value="' . html_escape(csrf_token()) . '">' . "\n";
-    echo '<input type="hidden" name="action" value="logout">' . "\n";
-    echo '<p><button type="submit">End my session</button></p>' . "\n";
-    echo '</form>' . "\n";
+    echo '<p class="auth-switch">New to the slideshow? <a href="' . html_escape(IDENTIFY_REGISTER_PAGE) . '">Register as a visitor</a>.</p>' . "\n";
+    echo '<p class="auth-privacy-note"><span aria-hidden="true">◆</span> Your code is checked securely and is not displayed again after submission.</p>' . "\n";
+    echo '</section>' . "\n";
+    echo '</section>' . "\n";
 
     identify_page_end();
 }
@@ -135,7 +130,7 @@ if (!in_array($method, ['GET', 'HEAD', 'POST'], true)) {
     exit;
 }
 
-send_security_headers();
+send_security_headers(false, true);
 session_start_secure();
 
 $status = 200;
@@ -189,7 +184,8 @@ if ($method === 'POST') {
             } else {
                 // Success: new session id, identity into the session, then Post-Redirect-Get.
                 visitor_login($visitor['id'], $visitor['name']);
-                visitor_auth_redirect(IDENTIFY_RESULT_PAGE);
+                // Automatically replay the returning visitor's saved photos after code verification.
+                visitor_auth_redirect('my_slideshow.php?welcome=1');
             }
         }
     }
@@ -205,10 +201,12 @@ if ($status === 200 && isset($_SESSION['identify_flash']) && is_string($_SESSION
 
 $current = visitor_current();
 if ($current !== null && $status === 200) {
-    identify_render_welcome($current, isset($_GET['identified']));
-} else {
-    if ($message === null && $status === 200 && isset($_GET['identified'])) {
-        $message = 'You are not identified. Please enter your visitor code.';
-    }
-    identify_render_form($message, $status);
+    // An authenticated returning visitor must never see a second "Play previous photos" prompt.
+    // Visiting this page again (including browser Back) resumes the personal slideshow directly.
+    visitor_auth_redirect('my_slideshow.php?welcome=1');
 }
+
+if ($message === null && $status === 200 && isset($_GET['identified'])) {
+    $message = 'You are not identified. Please enter your visitor code.';
+}
+identify_render_form($message, $status);

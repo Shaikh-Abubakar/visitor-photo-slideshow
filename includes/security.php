@@ -80,16 +80,16 @@ function session_start_secure(): void
  * Security headers for pages that show a form or personal data. Call before any output.
  *
  * $allowOwnImages (default false): permit images from this site only (img-src 'self').
- * $allowOwnStylesheets (default false): permit external stylesheets from this site only
- * (style-src 'self'). Only the public slideshow opts into both permissions.
+ * $allowOwnStylesheets (default false): permit same-origin stylesheets only (style-src 'self').
+ * Visual pages opt in to the shared local stylesheet; the public slideshow also opts into images.
  */
 function send_security_headers(bool $allowOwnImages = false, bool $allowOwnStylesheets = false): void
 {
     header('X-Content-Type-Options: nosniff');
     header('X-Frame-Options: DENY');
     header('Referrer-Policy: no-referrer');
-    // Keep the default restrictive. Gallery/slideshow opt into same-origin images;
-    // only the slideshow opts into its own same-origin CSS file. JavaScript remains blocked.
+    // Keep the default restrictive. Pages opt into only the same-origin resources they need.
+    // JavaScript remains blocked on every page.
     $images = $allowOwnImages ? " img-src 'self';" : '';
     $styles = $allowOwnStylesheets ? " style-src 'self';" : '';
     header("Content-Security-Policy: default-src 'none';" . $images . $styles . " form-action 'self'; frame-ancestors 'none'; base-uri 'none'");

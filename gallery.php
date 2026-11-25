@@ -11,11 +11,12 @@ declare(strict_types=1);
  * photographs are listed is the one in the server-side session: there is no visitor parameter, so
  * nothing in the address or in a form can show somebody else's photographs.
  *
- * The page lists only photographs the visitor may see (gallery_fetch_page(): own, status 'active',
- * matching consent record). Each image is loaded through photo.php, which repeats those checks.
+ * The page lists only photographs the visitor may see: their own active Private photos and their own
+ * Public photos with a matching consent record. Each image is loaded through photo.php, which repeats
+ * the same owner and visibility checks.
  * No file path or stored file name is ever written into the page.
  *
- * This file builds all its HTML with PHP. There is no CSS and no JavaScript.
+ * This file builds all its HTML with PHP. The page uses the shared CSS design system and no JavaScript.
  */
 
 require_once __DIR__ . DIRECTORY_SEPARATOR . 'includes' . DIRECTORY_SEPARATOR . 'bootstrap.php';
@@ -43,14 +44,20 @@ function gallery_page_start(string $title, int $status): void
     echo '<html lang="en">' . "\n";
     echo '<head>' . "\n";
     echo '<meta charset="utf-8">' . "\n";
+    echo '<meta name="viewport" content="width=device-width, initial-scale=1">' . "\n";
+    echo '<link rel="stylesheet" href="assets/css/style.css?v=9">' . "\n";
     echo '<title>' . html_escape($title) . '</title>' . "\n";
     echo '</head>' . "\n";
-    echo '<body>' . "\n";
-    echo '<h1>' . html_escape((string) app_config('APP_NAME')) . '</h1>' . "\n";
+    echo '<body class="app-body">' . "\n";
+    echo '<div class="app-site-shell">' . "\n";
+    echo '<header class="app-header"><p class="app-brand">' . html_escape((string) app_config('APP_NAME')) . '</p><span class="app-header-tag">Visitor Photo Slideshow</span></header>' . "\n";
+    echo '<main class="app-main gallery-page">' . "\n";
 }
 
 function gallery_page_end(): void
 {
+    echo '</main>' . "\n";
+    echo '</div>' . "\n";
     echo '</body>' . "\n";
     echo '</html>' . "\n";
 }
@@ -58,16 +65,16 @@ function gallery_page_end(): void
 /** The links and the logout button shown above every gallery view. */
 function gallery_render_menu(array $visitor): void
 {
-    echo '<p>You are identified as ' . html_escape($visitor['name']) . '.</p>' . "\n";
-    echo '<p><a href="' . html_escape(GALLERY_UPLOAD_PAGE) . '">Upload more photographs</a> | <a href="privacy.php">Privacy controls</a></p>' . "\n";
-
-    // Logout is a POST with the CSRF token (a plain link could be triggered by another web site).
-    // identify.php already ends the session for action=logout, so no logout code is repeated here.
-    echo '<form method="post" action="' . html_escape(GALLERY_IDENTIFY_PAGE) . '">' . "\n";
+    echo '<div class="gallery-toolbar">' . "\n";
+    echo '<p class="gallery-identity"><span class="identity-mark" aria-hidden="true">' . '✦' . '</span><span>Welcome, <strong>' . html_escape($visitor['name']) . '</strong></span></p>' . "\n";
+    echo '<nav class="gallery-toolbar-links" aria-label="Gallery actions"><a class="button button-secondary" href="my_slideshow.php"><span aria-hidden="true">▶</span> Play my slideshow</a><a class="button button-secondary" href="' . html_escape(GALLERY_UPLOAD_PAGE) . '"><span aria-hidden="true">＋</span> Upload photos</a><a href="privacy.php">Privacy controls</a></nav>' . "\n";
+    // Logout remains a CSRF-protected POST; it is deliberately not converted into a normal link.
+    echo '<form class="gallery-logout-form" method="post" action="' . html_escape(GALLERY_IDENTIFY_PAGE) . '">' . "\n";
     echo '<input type="hidden" name="csrf_token" value="' . html_escape(csrf_token()) . '">' . "\n";
     echo '<input type="hidden" name="action" value="logout">' . "\n";
-    echo '<p><button type="submit">End my session</button></p>' . "\n";
+    echo '<button class="button button-quiet" type="submit">End session</button>' . "\n";
     echo '</form>' . "\n";
+    echo '</div>' . "\n";
 }
 
 /** "2026-11-24 10:15 UTC" from a database DATETIME (stored in UTC). */
@@ -98,20 +105,24 @@ function gallery_page_link(int $page): string
  */
 function gallery_render_navigation(int $page, int $pages, int $total): void
 {
-    echo '<p>Page ' . html_escape((string) $page) . ' of ' . html_escape((string) $pages)
-        . ' (' . html_escape((string) $total) . ' photograph' . ($total === 1 ? '' : 's') . ' in total)</p>' . "\n";
-
-    if ($pages <= 1) {
-        return;
+    echo '<div class="gallery-pagination" aria-label="Gallery pagination">' . "\n";
+    echo '<p class="gallery-count">Showing page <strong>' . html_escape((string) $page) . '</strong> of ' . html_escape((string) $pages)
+        . ' <span>·</span> ' . html_escape((string) $total) . ' photograph' . ($total === 1 ? '' : 's') . ' total</p>' . "\n";
+    if ($pages > 1) {
+        echo '<nav class="pagination-links" aria-label="Photo pages">' . "\n";
+        if ($page > 1) {
+            echo '<a class="pagination-link" href="' . html_escape(gallery_page_link($page - 1)) . '">← Previous</a>';
+        } else {
+            echo '<span class="pagination-link is-disabled">← Previous</span>';
+        }
+        if ($page < $pages) {
+            echo '<a class="pagination-link" href="' . html_escape(gallery_page_link($page + 1)) . '">Next →</a>';
+        } else {
+            echo '<span class="pagination-link is-disabled">Next →</span>';
+        }
+        echo '</nav>' . "\n";
     }
-
-    $previous = $page > 1
-        ? '<a href="' . html_escape(gallery_page_link($page - 1)) . '">Previous</a>'
-        : 'Previous';
-    $next = $page < $pages
-        ? '<a href="' . html_escape(gallery_page_link($page + 1)) . '">Next</a>'
-        : 'Next';
-    echo '<p>' . $previous . ' | ' . $next . '</p>' . "\n";
+    echo '</div>' . "\n";
 }
 
 /**
@@ -120,44 +131,66 @@ function gallery_render_navigation(int $page, int $pages, int $total): void
  */
 function gallery_render(array $visitor, array $photos, int $page, int $pages, int $total, string $storageDirectory): void
 {
-    gallery_page_start('My photographs', 200);
-    echo '<h2>My photographs</h2>' . "\n";
+    gallery_page_start('My Photo Gallery', 200);
+    echo '<section class="content-heading gallery-heading"><p class="section-eyebrow"><span aria-hidden="true">✦</span> Your personal collection</p>' . "\n";
+    echo '<h1 class="page-title">My Photo Gallery</h1>' . "\n";
+    echo '<p class="page-subtitle">All your active Private and Public photographs currently available in your personal gallery.</p></section>' . "\n";
     gallery_render_menu($visitor);
 
     if ($total === 0) {
-        echo '<p><strong>You have no photographs to show yet.</strong> '
-            . 'Photographs you upload with your consent appear here.</p>' . "\n";
-        echo '<p><a href="' . html_escape(GALLERY_UPLOAD_PAGE) . '">Upload your first photographs</a></p>' . "\n";
+        echo '<section class="gallery-empty-state"><div class="empty-gallery-icon" aria-hidden="true">▧</div>' . "\n";
+        echo '<h2>Your gallery is waiting for its first memory</h2>' . "\n";
+        echo '<p>Private photographs and Public photographs you upload will appear here once they are available to your account.</p>' . "\n";
+        echo '<a class="button button-primary" href="' . html_escape(GALLERY_UPLOAD_PAGE) . '"><span aria-hidden="true">＋</span> Upload your first photos</a>' . "\n";
+        echo '</section>' . "\n";
         gallery_page_end();
         return;
     }
 
-    echo '<p>Only your own photographs are listed. Photographs that have been hidden are not shown.</p>' . "\n";
+    echo '<div class="gallery-intro-row"><div><h2 class="gallery-section-title">Your photographs</h2><p class="gallery-section-copy">Only your own active photographs are shown here. Private photos stay owner-only; Public photos also need consent and administrator approval to appear on the shared slideshow.</p></div>';
+    echo '<span class="gallery-total-pill">' . html_escape((string) $total) . ' ' . ($total === 1 ? 'photo' : 'photos') . '</span></div>' . "\n";
     gallery_render_navigation($page, $pages, $total);
 
-    echo '<table border="1" cellpadding="6">' . "\n";
-    echo '<tr><th>Photograph</th><th>File name</th><th>Uploaded</th><th>Status</th></tr>' . "\n";
+    echo '<section class="photo-grid" aria-label="Your photographs">' . "\n";
     foreach ($photos as $photo) {
         $address = GALLERY_PHOTO_ENDPOINT . '?id=' . $photo['id'];
-        // Is the file really there? Only the answer (yes/no) is used; the path is never shown.
+        // Check the private file remains inside storage; paths and generated names are never rendered.
         $fileIsThere = gallery_resolve_file($storageDirectory, $photo['stored_filename']) !== null;
 
-        echo '<tr>';
-        echo '<td>';
+        echo '<article class="photo-card">' . "\n";
+        echo '<div class="photo-card-image">' . "\n";
         if ($fileIsThere) {
-            echo '<a href="' . html_escape($address) . '"><img src="' . html_escape($address) . '" alt="'
-                . html_escape('Photograph ' . $photo['original_filename']) . '" width="' . GALLERY_THUMBNAIL_WIDTH
-                . '" loading="lazy"></a>';
+            echo '<a class="photo-image-link" href="' . html_escape($address) . '" aria-label="Open photograph ' . html_escape($photo['original_filename']) . '">';
+            echo '<img src="' . html_escape($address) . '" alt="' . html_escape('Photograph: ' . $photo['original_filename']) . '" width="160" loading="lazy">';
+            echo '</a>' . "\n";
         } else {
-            echo 'The image file is not available.';
+            echo '<div class="photo-unavailable" role="status"><span aria-hidden="true">▧</span><span>Image not available</span></div>' . "\n";
         }
-        echo '</td>';
-        echo '<td>' . html_escape($photo['original_filename']) . '</td>';
-        echo '<td>' . html_escape(gallery_format_date($photo['uploaded_at'])) . '</td>';
-        echo '<td>' . html_escape(gallery_status_label($photo['status'])) . '</td>';
-        echo '</tr>' . "\n";
+        echo '</div>' . "\n";
+        echo '<div class="photo-card-details">' . "\n";
+        echo '<div class="photo-card-title-row"><h3 title="' . html_escape($photo['original_filename']) . '">' . html_escape($photo['original_filename']) . '</h3><span class="photo-status">' . html_escape(gallery_status_label($photo['status'])) . '</span></div>' . "\n";
+        if ($photo['visibility'] === 'private') {
+            $visibilityLabel = 'Private — only you can see this';
+            $visibilityClass = 'photo-visibility-private';
+        } elseif ($photo['withdrawn_at'] !== null) {
+            $visibilityLabel = 'Public consent withdrawn — owner only';
+            $visibilityClass = 'photo-visibility-withdrawn';
+        } elseif ($photo['status'] === 'hidden' || $photo['approval_status'] === 'rejected') {
+            $visibilityLabel = 'Public — hidden or rejected';
+            $visibilityClass = 'photo-visibility-withdrawn';
+        } elseif ($photo['approval_status'] === 'approved' && $photo['status'] === 'active') {
+            $visibilityLabel = 'Public — approved for shared slideshow';
+            $visibilityClass = 'photo-visibility-public';
+        } else {
+            $visibilityLabel = 'Public — awaiting administrator approval';
+            $visibilityClass = 'photo-visibility-pending';
+        }
+        echo '<p class="photo-visibility-label ' . $visibilityClass . '">' . html_escape($visibilityLabel) . '</p>' . "\n";
+        echo '<p class="photo-upload-date"><span aria-hidden="true">◷</span> ' . html_escape(gallery_format_date($photo['uploaded_at'])) . '</p>' . "\n";
+        echo '</div>' . "\n";
+        echo '</article>' . "\n";
     }
-    echo '</table>' . "\n";
+    echo '</section>' . "\n";
 
     gallery_render_navigation($page, $pages, $total);
     gallery_page_end();
@@ -177,7 +210,7 @@ if (!in_array($method, ['GET', 'HEAD'], true)) {
 }
 
 // The gallery shows images, so (and only so) it allows images from this site.
-send_security_headers(true);
+send_security_headers(true, true);
 session_start_secure();
 
 // 1. Authentication. The visitor id comes from the server-side session and from nowhere else.
@@ -193,8 +226,8 @@ try {
     // Details go to the server log only.
     error_log(sprintf('Gallery could not be loaded: %s: %s', get_class($e), $e->getMessage()));
     gallery_page_start('My photographs', 500);
-    echo '<h2>My photographs</h2>' . "\n";
-    echo '<p><strong>Your photographs could not be shown because of a technical problem. Please try again later.</strong></p>' . "\n";
+    echo '<section class="content-heading gallery-heading"><h1 class="page-title">My Photo Gallery</h1></section>' . "\n";
+    echo '<div class="notice notice-error" role="alert"><strong>Your photographs could not be shown because of a technical problem. Please try again later.</strong></div>' . "\n";
     gallery_page_end();
     exit;
 }

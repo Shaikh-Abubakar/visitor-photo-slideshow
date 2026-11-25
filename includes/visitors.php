@@ -84,6 +84,17 @@ function visitor_name_validate(mixed $input): array
     return ['name' => $name, 'errors' => []];
 }
 
+/**
+ * Checks whether a visitor name is already registered. This is only a warning signal: names are
+ * not unique identifiers, so this function must never be used to sign a visitor in automatically.
+ */
+function visitor_name_exists(PDO $pdo, string $name): bool
+{
+    $statement = $pdo->prepare('SELECT 1 FROM visitors WHERE name = ? LIMIT 1');
+    $statement->execute([$name]);
+    return (bool) $statement->fetchColumn();
+}
+
 /** Base32 (RFC 4648 alphabet, no padding) of a byte string. */
 function visitor_base32_encode(string $bytes): string
 {

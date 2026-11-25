@@ -84,8 +84,20 @@ function make_photo(PDO $pdo, int $visitorId, int $consentId, string $label, str
     $counter++;
     $stored = str_pad(dechex($counter), 48, 'c', STR_PAD_LEFT) . '.png';
     $pdo->prepare(
-        'INSERT INTO photos (visitor_id, consent_id, stored_filename, original_filename, mime_type, file_size, status) VALUES (?, ?, ?, ?, ?, ?, ?)'
+        'INSERT INTO photos (visitor_id, consent_id, visibility, stored_filename, original_filename, mime_type, file_size, status) VALUES (?, ?, \'public\', ?, ?, ?, ?, ?)'
     )->execute([$visitorId, $consentId, $stored, $label, $mime, 100, $status]);
+    return (int) $pdo->lastInsertId();
+}
+
+/** Inserts an owner-only photo with no public consent record. */
+function make_private_photo(PDO $pdo, int $visitorId, string $label, string $status = 'active'): int
+{
+    static $privateCounter = 0;
+    $privateCounter++;
+    $stored = str_pad(dechex(1000 + $privateCounter), 48, 'd', STR_PAD_LEFT) . '.png';
+    $pdo->prepare(
+        "INSERT INTO photos (visitor_id, consent_id, visibility, stored_filename, original_filename, mime_type, file_size, status) VALUES (?, NULL, 'private', ?, ?, 'image/png', 100, ?)"
+    )->execute([$visitorId, $stored, $label, $status]);
     return (int) $pdo->lastInsertId();
 }
 
@@ -143,20 +155,23 @@ try {
     $a3 = make_photo($pdo, $alice, $aliceLater, 'a3.png');
     $aHidden = make_photo($pdo, $alice, $aliceLater, 'a-hidden.png', 'hidden');
     $b1 = make_photo($pdo, $bob, $bobConsent, 'b1.png');
+    $alicePrivate = make_private_photo($pdo, $alice, 'alice-private.png');
 
-    check('Alice sees 3 photographs (2 from the earlier consent session, 1 from the later; the hidden one is not counted)',
-        gallery_count_photos($pdo, $alice) === 3);
+    check('Alice sees 4 active photographs including her Private photo (the hidden one is not counted)',
+        gallery_count_photos($pdo, $alice) === 4);
     check('Bob sees exactly 1 photograph', gallery_count_photos($pdo, $bob) === 1);
     check('Carol (no photographs) sees 0', gallery_count_photos($pdo, $carol) === 0);
 
     $aliceRows = gallery_fetch_page($pdo, $alice, 1);
     $aliceIds = array_map(static fn (array $r): int => $r['id'], $aliceRows);
-    check('Alice\'s page lists her photographs, newest first', $aliceIds === [$a3, $a2, $a1]);
+    check('Alice\'s page lists her photographs, including her Private photo, newest first', $aliceIds === [$alicePrivate, $a3, $a2, $a1]);
     check('Alice\'s page contains no photograph of Bob and no hidden photograph',
         !in_array($b1, $aliceIds, true) && !in_array($aHidden, $aliceIds, true));
     check('every listed row has status active', array_unique(array_map(static fn (array $r): string => $r['status'], $aliceRows)) === ['active']);
 
-    check('Alice can open her own photograph (find_visible_photo)', (gallery_find_visible_photo($pdo, $a1, $alice)['id'] ?? 0) === $a1);
+    check('Alice can open her own Public photograph (find_visible_photo)', (gallery_find_visible_photo($pdo, $a1, $alice)['id'] ?? 0) === $a1);
+    check('Alice can open her own Private photograph', (gallery_find_visible_photo($pdo, $alicePrivate, $alice)['id'] ?? 0) === $alicePrivate);
+    check('Bob cannot open Alice\'s Private photograph', gallery_find_visible_photo($pdo, $alicePrivate, $bob) === null);
     check('Alice cannot open Bob\'s photograph by its id', gallery_find_visible_photo($pdo, $b1, $alice) === null);
     check('Bob cannot open Alice\'s photograph by its id', gallery_find_visible_photo($pdo, $a1, $bob) === null);
     check('a hidden photograph cannot be opened, not even by its owner', gallery_find_visible_photo($pdo, $aHidden, $alice) === null);
@@ -170,7 +185,7 @@ try {
     $crossed = make_photo($pdo, $alice, $bobConsent, 'a-crossed.png');         // consent that belongs to Bob
     $pdo->exec('SET FOREIGN_KEY_CHECKS = 1');
     check('a photograph with no consent record is not counted or listed or opened',
-        gallery_count_photos($pdo, $alice) === 3
+        gallery_count_photos($pdo, $alice) === 4
         && !in_array($damaged, array_map(static fn (array $r): int => $r['id'], gallery_fetch_page($pdo, $alice, 1)), true)
         && gallery_find_visible_photo($pdo, $damaged, $alice) === null);
     check('a photograph that points at ANOTHER visitor\'s consent is not shown',

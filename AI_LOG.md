@@ -702,3 +702,351 @@ No MySQL/MariaDB database connection, schema import/migration, visitor registrat
 - Ubuntu result (if available):
 - Database migration result:
 - Issues I fixed after this review:
+
+## Prompt 5: administrator login and dashboard UI (2026-11-24)
+
+| Item | Detail |
+|---|---|
+| Input | User requested the administrator login, dashboard, visitor directory, and photo review UI to be redesigned using the existing common stylesheet. |
+| Source version | Continued from the Prompt 4 delivery project. No database schema or migration files were changed. |
+| Inspected | Existing `admin/login.php`, `admin/index.php`, `admin/visitors.php`, `admin/photos.php`, `admin/photo.php`, `admin/auth.php`, `admin/logout.php`, `includes/security.php`, `database/schema.sql`, `.env.example`, and `assets/css/style.css`. |
+| Implementation | Added `admin/layout.php` for a shared authenticated admin header/navigation/footer; redesigned admin login; redesigned dashboard statistics and recent visitor/photo activity; redesigned visitor search/table/pagination; redesigned photo review cards with separate consent and approval labels; added responsive admin CSS components. |
+| Preserved | Password verification, session regeneration, admin authorization, CSRF validation, prepared statements, escaped output, POST-only logout/actions, authenticated private photo previews, consent verification before approval, and existing approval/rejection database updates. No database schema changes. |
+| Tests actually run | PHP syntax lint passed for all 36 PHP files; `tests/check_admin_ui.php` passed 15/15; `tests/check_step9_security.php` passed 11/11; slideshow rendering checks passed 18/18; slideshow dimension checks passed 7/7; PHP built-in server returned HTTP 200 for admin login and CSS, and HTTP 302 to login for an unauthenticated dashboard request. |
+| Not run | Valid administrator login, database-backed dashboard counts/recent activity, visitor query results, photo approval/rejection, logout with an authenticated database session, MySQL/MariaDB, browser visual rendering, Windows XAMPP, and Ubuntu Apache. The test PHP runtime does not have `pdo_mysql`. |
+
+### Limitations
+
+The current schema has no visitor status column, so the visitor directory shows registration date and associated photo count rather than inventing a visitor status. The existing review workflow supports Approve and Hide / reject; a separate Hide action was not added because it does not exist in the current workflow. Dashboard statistics and recent records are queried live from the existing database when the configured database is available. No administrator account or credentials were created.
+
+## Prompt 7: public slideshow experience and CSS design system (2026-11-24)
+
+| Item | Detail |
+|---|---|
+| Input | User requested deeper project research and a polished slideshow file with multiple animations, a coherent UI design system, and practical playback functionality. |
+| Source version | `visitor-photo-slideshow-professional-review.zip` from the project Library. The implementation was based on its README, architecture, current PHP slideshow selectors, image endpoint, security headers, and regression tests. No original assignment PDF was available in the inspected project source. |
+| Research | Reviewed W3C WCAG 2.2 guidance for pause/stop/hide and MDN guidance for `prefers-reduced-motion`. These inform the visible pause/resume control and reduced-motion CSS. |
+| Changed files | Rebuilt `slideshow.php`; replaced `slideshow.css`; updated `tests/check_slideshow_rendering.php`; added `SLIDESHOW_DESIGN_SYSTEM.md`; this AI log and `TESTING_REPORT.md`. No database schema, consent text, visitor upload, authentication, or moderation code was changed. |
+| Functionality | Added seven CSS-only entrance styles (cinematic, crossfade, slow zoom, gallery slide, curtain reveal, soft focus, and restrained pan); pause/resume; manual next; six slide intervals; transition choices; a progress line; empty/error states; responsive controls; and reduced-motion handling. The existing server-side selector and filtered image endpoint remain the source of photo eligibility. |
+| Constraint | The application remains JavaScript-free. Photo changes are full page requests; the effects animate the incoming image. A true two-image overlapping crossfade, persistent keyboard shortcuts, and a programmatic fullscreen button would require JavaScript or a different architecture. Browser F11 remains the full-screen method. |
+| Tests run | PHP syntax check for the updated slideshow; 26/26 slideshow rendering/eligibility checks after the added control assertions; 7/7 image-dimension checks; 11/11 responsive source checks; 15/15 admin UI checks; 11/11 security checks; 9/9 project entry/UI checks. The updated slideshow rendering check was rerun and passed 26/26 checks. |
+| Not tested | Live MySQL/MariaDB photo selection, actual rotation with visitor uploads, consent withdrawal during a real display session, actual visual animation playback in Chrome/Firefox, real TV/kiosk behaviour, Windows XAMPP, and Ubuntu Apache. The current runtime has no configured `DB_USER`/database connection for DB-backed tests. |
+
+### Research references
+
+- W3C WAI, WCAG 2.2 Understanding Success Criterion 2.2.2, Pause, Stop, Hide: https://www.w3.org/WAI/WCAG22/Understanding/pause-stop-hide
+- MDN, Using media queries for accessibility (`prefers-reduced-motion`): https://developer.mozilla.org/en-US/docs/Web/CSS/Guides/Media_queries/Using_for_accessibility
+- W3C WAI, Technique C39, using `prefers-reduced-motion`: https://www.w3.org/WAI/WCAG22/Techniques/css/C39
+
+### Student review
+
+- I checked the transition styles and playback controls on my target browser:
+- I confirmed that only approved photos with valid consent appear:
+- My XAMPP / database result:
+- Any display-device or accessibility issue found:
+
+## User-reported issue review: duplicate visitor records, missing private-photo option, and public sharing (2026-11-25)
+
+| Item | Detail |
+|---|---|
+| Date | 2026-11-25 |
+| AI tool | ChatGPT (OpenAI), GPT-6 |
+| Input | The student reported: (1) the same visitor name is appearing as multiple visitors when the same person returns; (2) there is no Private option for an uploaded photograph; and (3) photographs are not appearing as expected for all users, although public sharing was requested. The student explicitly asked that these problems be recorded in this AI log. |
+| Source inspected | `visitor-photo-slideshow-slideshow-upgrade.zip`, including `register.php`, `identify.php`, `visitors.php`, `includes/visitors.php`, `includes/visitor_auth.php`, `upload.php`, `includes/uploads.php`, `includes/gallery.php`, `includes/slideshow.php`, `slideshow.php`, `privacy.php`, `admin/photos.php`, `admin/index.php`, and `database/schema.sql`. |
+| Scope of this review | Source-code diagnosis and documentation only. No PHP, CSS, database schema, migration, or live database was changed in this review. The reported behaviours are therefore documented, not fixed. |
+
+### Issue 1: the same returning person can be counted as a new visitor
+
+**What the student observed:** A person returns and enters the same name, but the administrator's visitor count/list shows another visitor record with that same name.
+
+**Cause found in the code:** `visitor_register()` in `includes/visitors.php` always generates a new random visitor code and executes `INSERT INTO visitors (name, visitor_code_hash)`. The `visitors` table has a unique key on `visitor_code_hash`, but `name` has only a normal (non-unique) index. No code checks whether the name already belongs to an existing visitor. The registration page (`register.php`) calls this insert function whenever the visitor submits the registration form. The returning-visitor flow (`identify.php`) is separate: it finds the existing record using the submitted visitor code hash through `visitor_find_by_code()` and does not create another visitor row.
+
+**Why the current design behaves this way:** A name is not a safe unique identifier. Two different people can have the same name, and names can be typed with different spelling, spacing, or scripts. The existing design deliberately uses the generated visitor code to identify the same person again. A visitor who clicks Register instead of “Already registered? Identify yourself here” will be recorded as a new visitor, even when the name matches an earlier record.
+
+**AI mistake / requirement missed:** The interface did not make the returning-visitor path prominent enough at the moment a person might mistakenly register again. The AI also failed to explain clearly that typing the same name is not how the existing system recognises a returning visitor. The result is confusing duplicate-looking visitor entries and a visitor count that may be higher than the number of distinct people.
+
+**Required correction to plan:** Improve the registration experience with a clear returning-visitor callout. When a name already exists, show a non-blocking warning such as “A visitor with this name is already registered. If this is you, use your visitor code to identify yourself. If this is a different person with the same name, you may continue as a new visitor.” Do not silently merge records or authenticate a person by name alone. Keep the visitor code as the identity credential. Any lost-code recovery must use a separately verified recovery method; the current database stores only a one-way hash and cannot reveal the original code.
+
+### Issue 2: there is no Private/Public choice for an individual photograph
+
+**What the student expected:** A visitor should be able to mark a photograph Private so that it remains available in that visitor's own gallery but is not shared on the public slideshow. A visitor should also be able to choose Public for photographs they want to share.
+
+**Cause found in the code:** `upload.php` displays a single required public-sharing consent checkbox. It does not display a Private/Public selector. The POST handler rejects every upload unless `consent=yes`. `upload_process()` in `includes/uploads.php` always inserts a consent row and attaches that consent to every photo in the upload session. In `database/schema.sql`, `photos.consent_id` is `NOT NULL`, and the `photos` table has no `visibility` or `privacy` column. `photos.status` only means `active` or `hidden`; it is not a private/public setting. The gallery code checks ownership and active status, but cannot distinguish a private photo from a public one. `privacy.php` withdraws all active public-display consent records for a visitor; it is not an individual-photo privacy selector.
+
+**AI mistake / requirement missed:** The AI treated “stored in private storage” as if it meant “private photo.” These are different concepts. Private storage protects the image file from direct public URL access; it does not give the visitor a choice about whether an uploaded photograph may be displayed publicly. The upload workflow therefore did not implement the requested per-photo privacy control.
+
+**Required correction to plan:** Add an explicit per-photo visibility field with values such as `private` and `public`, plus a database migration for existing installations. A private photo must not require public-display consent and must not appear on the public slideshow or public gallery. Its owner must still be able to view it after visitor identification. A public photo must require a separate, explicit public-display consent and administrator approval before it can appear publicly. Prefer a per-photo choice so a visitor can make different decisions for different photographs in the same upload batch. Ensure private images remain served only through the authenticated owner-checking endpoint. Do not reinterpret `status='hidden'` as privacy.
+
+### Issue 3: public photos are not automatically visible to everyone
+
+**What the student expected:** A photograph deliberately marked Public should be available to all users through the shared public display, not only in the uploading visitor's own gallery.
+
+**Cause found in the code:** The application already has a shared, unauthenticated public route at `slideshow.php`; it is not limited to the currently identified visitor. However, `slideshow_find_next_photo()` and `slideshow_find_photo_for_serving()` in `includes/slideshow.php` only return a photo when all of these conditions are true:
+
+1. `photos.status = 'active'`;
+2. `photos.approval_status = 'approved'`;
+3. a matching consent row exists for that same visitor and photo;
+4. the consent version equals `SLIDESHOW_PUBLIC_CONSENT_VERSION`; and
+5. `consents.withdrawn_at IS NULL`.
+
+New uploads are inserted with `approval_status='pending'`, so they do not appear on the public slideshow until an administrator approves them. The upload form currently has no Public/Private choice, so visitors cannot clearly request public sharing for an individual photo. The visitor's personal `gallery.php` is intentionally owner-only; it is not a shared gallery for all visitors.
+
+**AI mistake / requirement missed:** Although a public slideshow route exists, the AI did not provide a complete, visible Public/Private workflow that explains why a submitted photo is or is not visible to everyone. It also did not make the distinction between the owner-only gallery and the shared public slideshow sufficiently clear.
+
+**Required correction to plan:** Keep the shared public slideshow accessible without visitor login. Once a visitor explicitly chooses Public, grants the required consent, and the administrator approves the photo, that photo should be eligible for every person who opens the public slideshow. Keep Private photos restricted to their owner. Display understandable states in the owner's gallery, for example “Private — only you can see this”, “Public — awaiting administrator approval”, “Public — approved and visible on the shared slideshow”, “Rejected / hidden”, and “Public consent withdrawn”. Do not expose private photos in the administrator's public-review list unless the project's privacy policy explicitly requires an authorized private-review workflow.
+
+### Regression and acceptance checks required before calling these issues fixed
+
+- Re-registering with an existing name must show a clear returning-visitor warning; using the correct visitor code must identify the existing visitor and must not increase the visitor count.
+- Two different people with the same name must still be able to have separate visitor records; name matching must never log one person into another person's gallery.
+- A private photo must be accepted without public-display consent, remain visible to its owner, and be rejected by the public slideshow image endpoint even if its URL or photo id is guessed.
+- A public photo without consent, with withdrawn consent, pending approval, rejected approval, or hidden status must never appear in the public slideshow.
+- A public photo with valid consent, active status, and administrator approval must appear on the same shared slideshow for an unauthenticated browser and for different visitor accounts.
+- One visitor's private photos must never appear in another visitor's gallery.
+- Consent withdrawal must immediately remove that visitor's public photos from the shared slideshow while preserving their owner-only gallery access where applicable.
+- The database migration must be tested on the existing MySQL/MariaDB data before deployment; do not tell the student to drop or recreate their database.
+- Test the complete workflow on Windows XAMPP and verify that existing `.env` settings and `storage/uploads/` files remain intact.
+
+### Verification status
+
+This entry is based on direct source inspection. No live MySQL/MariaDB connection or browser workflow was available in this review. The corrective implementation, migration, and all acceptance checks above remain outstanding. The student should not treat these issues as fixed merely because they have been recorded here.
+
+## Prompt 8: fix duplicate visitor registration, photo visibility, slideshow fitting and display interval (2026-11-25)
+
+| Item | Detail |
+|---|---|
+| AI tool | ChatGPT (OpenAI), GPT-6 |
+| Input | The student asked to fix the same-name duplicate visitor problem, add a Private photo choice, make approved Public photographs visible to all slideshow viewers, fit photographs correctly on the large slideshow screen, and use 5 seconds by default instead of 10. The student also asked to keep these problems and the AI mistakes in `AI_LOG.md`. |
+| Source | Continued from the existing `visitor-photo-slideshow-slideshow-upgrade.zip` project source. No original assignment PDF was available in the project source used for this update. |
+| Main files changed | `register.php`, `includes/visitors.php`, `upload.php`, `includes/uploads.php`, `includes/gallery.php`, `gallery.php`, `photo.php`, `includes/slideshow.php`, `slideshow.php`, `slideshow.css`, `admin/auth.php`, `admin/index.php`, `admin/photos.php`, `admin/photo.php`, `database/schema.sql`, and the new `database/step11_photo_visibility_migration.sql`. Related tests, README, architecture, assumptions, slideshow design notes and this AI log were updated. |
+| Data-safety boundary | Existing visitor records are not merged or deleted. Existing database contents and existing image files are not modified by this source package. The migration must be backed up and run once by the student against the existing database. |
+
+### Problem 1: the same returning visitor creates another row
+
+**Correction:** Registration now checks for a matching name using a prepared query. When a name is already present, the form shows a warning and links to `identify.php`; creating a new record with that name requires the user to confirm they are a different person. Returning-visitor identification still uses the existing one-time visitor code and the existing code-hash lookup. It does not create a visitor row.
+
+**Reason for not merging by name:** Two people can share a name. Name matching is therefore a warning only, never proof of identity and never an automatic login or merge. Old duplicate-looking rows are deliberately preserved because the application cannot safely determine whether they belong to one person or several. A returning person must use their original visitor code. A person who has lost the code cannot be recovered from a name alone under the current one-way-hash design.
+
+### Problem 2: visitors had no Private photo choice
+
+**Correction:** The upload form offers Private and Public. Private is selected by default. A Private upload does not create a public-display consent row and stores `photos.consent_id = NULL`. Its photo row has `visibility='private'`; it appears in that visitor's own authenticated gallery and is retrievable only through the owner-checking `photo.php` endpoint. The public slideshow selector, public photo endpoint and administrator public-review queue all explicitly exclude Private photos.
+
+A Public upload requires the visitor to tick the public-display consent checkbox. Its rows are stored with `visibility='public'` and a matching consent record. Public rows still start with `approval_status='pending'` and are not shown publicly until an administrator approves them.
+
+**Upload-batch limitation:** To keep this project JavaScript-free and preserve the existing multiple-file upload form, the Private/Public selector applies to every file in one upload submission. To give different photos different visibility, the visitor must upload those photos in separate submissions. The database still records visibility on each photo row. The form now states this limitation clearly; it does not claim that a different per-file selector is available inside one multi-file batch.
+
+### Problem 3: Public photos were not showing to everyone
+
+**Correction:** The public slideshow route remains unauthenticated, so any person who opens `slideshow.php` can see eligible shared photos without registering or signing in. The selection and image-serving queries now require all of the following: `visibility='public'`; an existing visitor row; `status='active'`; `approval_status='approved'`; a matching consent row for the same visitor; consent version `1.0`; and `withdrawn_at IS NULL`. The administrator review queue contains Public submissions only. The owner's personal gallery remains owner-only and can show both active Private photos and the owner's Public photos; a withdrawn Public consent is labelled owner-only and stops public display.
+
+**Important clarification:** Public selection does not mean immediate publication. Visitor consent and administrator approval are separate gates. A photo marked Public is shared with everyone through the public slideshow after both gates pass. Pending, rejected, hidden, private or consent-withdrawn photos are not displayed to the public.
+
+### Problem 4: photographs did not fit the large slideshow stage
+
+**Correction:** The slideshow frame now fills the available row between the header and controls. Its image is absolutely anchored to the frame (`inset: 0`, width and height 100%) and uses centered `object-fit: contain`. Portrait and landscape images therefore scale proportionally to the largest size that fits the available stage without crop or distortion. The outer shell uses a full dynamic viewport height and a shrink-safe three-row grid. The change does not create missing image detail: an originally low-resolution photo can still look soft when enlarged on a very large screen. Upload the original/high-resolution version for best display quality.
+
+### Problem 5: the display used 10 seconds rather than the requested 5
+
+**AI mistake found:** The centralized `.env.example`/configuration default already said 5 seconds, but `slideshow.php` did not include 5 in its allowed list and its invalid-value fallback was 10. Consequently, the user-facing page ignored the configured default and displayed 10 seconds.
+
+**Correction:** `slideshow.php` now uses 5 as the default and fallback, accepts 5, 8, 10, 15 and 20 seconds, and the CSS progress line supports all five choices. The default setting and progress bar both use 5 seconds. Asset cache versions were updated so browsers reload the new CSS.
+
+### Tests actually run in the build environment
+
+- PHP syntax lint passed for every PHP file in the project (run with PHP 8.4.24 CLI).
+- `tests/check_visibility_workflow.php`: 17/17 source-level identity/privacy checks passed.
+- `tests/check_slideshow_rendering.php`: 29/29 slideshow rendering and public eligibility checks passed.
+- `tests/check_slideshow_dimensions.php`: 7/7 image sizing checks passed.
+- `tests/check_project_entry_ui.php`: 9/9 checks passed.
+- `tests/check_responsive_ui.php`: 11/11 checks passed.
+- `tests/check_admin_ui.php`: 15/15 checks passed.
+- `tests/check_step9_security.php`: 11/11 checks passed.
+- These are 99 passing source-level/static checks in total. CSS parser validation was also run separately (see `TESTING_REPORT.md`).
+
+### Not tested / must be tested on the student's XAMPP installation
+
+The build PHP runtime has PDO but `PDO::getAvailableDrivers()` is empty. It does not have `pdo_mysql` or `mbstring`; therefore the database-backed upload/gallery/identification tests could not run against MySQL/MariaDB. No live database, Chrome/Edge visual session, TV/kiosk display, Windows XAMPP Apache service or Ubuntu Apache service was available. The screenshot/browser layout itself must therefore still be checked on the student's target monitor after installing the migration. No live workflow or cross-platform success is claimed.
+
+### Deployment action
+
+Back up the existing database first. Import `database/step11_photo_visibility_migration.sql` once into the current project database. Do not drop or recreate the database. Keep the existing `.env` and `storage/uploads/` files when merging the new project source. The migration preserves earlier records and makes existing photos Public only where a matching consent version `1.0` still exists and has not been withdrawn; those photos remain subject to their existing `approval_status` and administrator review. For the complete instructions and current test status, see `README.md` and `TESTING_REPORT.md`.
+
+**Existing local configuration note:** The project archive preserves the user's `.env` instead of replacing it. If the existing file contains `SLIDESHOW_DEFAULT_DURATION_SECONDS=10`, change that value to `5` to use the requested default. The code safely falls back to 5 when the configured duration is unsupported.
+
+
+---
+
+## Prompt 7 — Upload next actions, previous-visit playback and slideshow settings
+
+### User's requested behavior
+
+After a successful upload, the visitor must be able to choose **Play slideshow** or **Upload more photos**. When the same registered visitor returns and identifies with the original visitor code, their previously uploaded photos should also be available to replay. The slideshow needs a clear Settings button with the available controls grouped in one place. Settings must not unexpectedly force the browser into fullscreen.
+
+### AI implementation mistake / correction
+
+**Previous limitation:** The prior version only showed a success notice after upload. It did not provide the requested next action. Returning visitors could view the personal gallery, but neither the identification success page nor the gallery provided a direct action to replay their earlier photographs. The existing settings choices were always displayed beneath the slideshow controls, and the settings icon only pointed to an anchor. That did not pause the timed meta refresh, so the visitor could be moved away from the settings area before finishing a choice.
+
+**Correction:** The upload result now shows two clear actions: `Play my photo slideshow` and `Upload more photos`. When the upload batch is Public, it also links to the shared public display but explains that the new batch will not appear there until consent is recorded and an administrator approves it. The personal slideshow route is linked from both the returning-visitor welcome page and the personal gallery.
+
+### Personal slideshow privacy design
+
+`my_slideshow.php` requires the existing authenticated visitor session. It plays every active photograph available to that visitor's own gallery, not merely the most recent upload. That includes Private photos and the owner's Public photos that remain visible to the owner, including when public consent has later been withdrawn. The slide image uses `photo.php`, which independently verifies the owner session for each image request. The new selector in `includes/gallery.php` constrains every row to the current visitor id and active status and applies the same owner-gallery visibility condition. The personal slideshow does not call the public slideshow image endpoint. Private photos are not exposed to other visitors and are never added to the public display by this feature.
+
+### Slideshow settings panel
+
+The Settings control now opens the currently displayed photograph in a paused state and displays a compact floating settings panel (maximum 70vh; it does not resize the photo stage or cover the full screen). It contains seven transition choices (Cinematic, Crossfade, Slow zoom, Gallery slide, Curtain reveal, Soft focus and Ken Burns pan) and five timing choices (5, 8, 10, 15 and 20 seconds). Changing a choice keeps the same photo visible and leaves the slideshow paused. The panel also explains that the full original photograph is fitted with `object-fit: contain` and that browser fullscreen is manual. Resume continues the slideshow using the selected values. The settings panel is hidden unless explicitly opened and floats above the lower-right display area with a bounded height, so it does not permanently consume screen space or force fullscreen.
+
+### Fullscreen constraint
+
+**Important implementation constraint:** The project is intentionally JavaScript-free and its Content Security Policy blocks scripts. A custom Fullscreen API button cannot honestly be implemented under those constraints because fullscreen must be initiated by a user gesture through browser script. Therefore, no setting or button falsely claims to launch fullscreen. The display stays windowed unless the visitor presses F11 (or uses the browser's own fullscreen menu). The settings panel itself never switches to fullscreen.
+
+### Files changed
+
+`upload.php`, `identify.php`, `gallery.php`, `includes/gallery.php`, `slideshow.php`, `slideshow.css`, `assets/css/style.css`, and new `my_slideshow.php` plus `tests/check_returning_personal_slideshow.php`. README, ARCHITECTURE, TESTING_REPORT and this AI log were updated. Shared CSS version references were incremented to avoid stale cached styles. No database schema change or migration is required for this prompt.
+
+### Tests performed
+
+- All project PHP files passed `php -l` under PHP 8.4.24 CLI.
+- `check_returning_personal_slideshow.php`: 25/25 static checks passed.
+- `check_visibility_workflow.php`: 17/17 checks passed.
+- `check_slideshow_rendering.php`: 29/29 checks passed.
+- `check_slideshow_dimensions.php`: 7/7 checks passed.
+- `check_responsive_ui.php`: 11/11 checks passed.
+- `check_project_entry_ui.php`: 9/9 checks passed.
+- `check_admin_ui.php`: 15/15 checks passed.
+- `check_step9_security.php`: 11/11 checks passed.
+- CSS parser: both local stylesheets parsed without errors.
+
+### Not verified in this environment
+
+The test runtime has no PDO MySQL driver, so no live query or authenticated photo-serving request was performed. The browser, meta-refresh timing, actual image loading, and TV/fullscreen experience were not exercised in Chrome/Edge or XAMPP. Those tests remain required on the user's Windows/XAMPP installation. No live database or visitor records were changed by this implementation.
+
+
+---
+
+## Prompt 9 — Make the slideshow flow complete, navigable and photo-first
+
+### User feedback
+
+The user reported that the previous flow did not feel like a finished slideshow, asked where the Back button was, and requested that a returning visitor entering their code should immediately see their previous photographs. The visitor should have an easy-to-find Stop action that returns to the personal dashboard or home page.
+
+### Issues found in the previous implementation
+
+- The identification success screen required another click before the previous photos played.
+- The personal slideshow did not have a clearly labelled Previous-photo control or a persistent Stop-and-dashboard action.
+- Its selection code started with the newest photo and then used a mismatched wrap order, so the visitor did not see a consistent chronological sequence.
+- The public slideshow also lacked a Previous control and a clear Stop/Home action.
+- The default cinematic transition used zoom/brightness movement and gave the page a moving-video feel rather than a calm photo presentation.
+
+### Fixes made
+
+- On a valid visitor code, `identify.php` now creates the same secure visitor session and immediately redirects to `my_slideshow.php?welcome=1`.
+- A returning visitor's slideshow begins with their oldest active, valid photo and proceeds forward in upload order. Previous and Next controls work in both directions and wrap at the ends.
+- The personal slideshow shows a welcome-back banner, current slide number/total, a visible Back to Dashboard link, a persistent Stop Slideshow action, Previous, Pause/Play, Next and Settings.
+- The public slideshow also shows a slide counter, Previous, Pause/Play, Next, Settings and Stop/Home. Its previous-photo query keeps the same consent, moderation and active-status conditions as its next-photo query.
+- Soft Fade is now the default transition to keep attention on the still photograph rather than zooming/panning it. The other CSS-only transition choices remain available in Settings.
+- No database schema change or migration is required. The existing owner-only `photo.php` image route and public-only `slideshow_photo.php` route remain separate.
+
+### Files changed
+
+`identify.php`, `includes/gallery.php`, `includes/slideshow.php`, `my_slideshow.php`, `slideshow.php`, `slideshow.css`, `tests/check_returning_personal_slideshow.php`, and new `tests/check_step13_slide_flow.php`. README, ARCHITECTURE, TESTING_REPORT and this log were updated.
+
+### Tests actually run in the build environment
+
+- PHP syntax lint: all 43 PHP files passed.
+- `check_step13_slide_flow.php`: 19/19 passed.
+- `check_returning_personal_slideshow.php`: 29/29 passed.
+- `check_slideshow_rendering.php`: 29/29 passed.
+- `check_slideshow_dimensions.php`: 7/7 passed.
+- `check_responsive_ui.php`: 11/11 passed.
+- `check_project_entry_ui.php`: 9/9 passed.
+- `check_admin_ui.php`: 15/15 passed.
+- `check_step9_security.php`: 11/11 passed.
+- `check_visibility_workflow.php`: 17/17 passed.
+- CSS parser: both local CSS files had zero parse errors.
+- Combined passed source-level checks above: 147.
+
+### Checks blocked by missing local database configuration
+
+`check_database.php`, `check_gallery.php`, `check_identify.php` and `check_upload.php` could not execute because this build container has no project `.env`/DB_USER credentials and no live project database. The errors were configuration/database prerequisites, not evidence that those workflows passed. Actual MySQL/MariaDB queries, code-to-slideshow session redirects and image delivery must be tested on the user's XAMPP installation.
+
+### Deliberate limitation
+
+The system still blocks JavaScript by Content Security Policy, as required by the project architecture. Timed slide advancement therefore remains a server-rendered timed navigation and the transition is a CSS entrance fade; it is not a JavaScript in-page crossfade. This preserves the no-JavaScript constraint and keeps the controls as ordinary links.
+
+
+---
+
+## Prompt 10 — Remove video-like motion and stop after the final slide
+
+### User feedback
+
+The user reported that the slideshow still looked like a video and did not stop automatically after the last photograph with a clear option to go Home.
+
+### What was wrong in the previous AI implementation
+
+- The public and personal selectors intentionally wrapped from the last photo back to the first. This made the slideshow loop forever, so no natural completion state could appear.
+- The stylesheet still contained cinematic zoom, slow zoom, pan, blur and reveal effects, plus a moving progress timeline. Those visual treatments made the display resemble a video player rather than a sequence of still photographs.
+- Earlier documentation incorrectly described wrap-around and seven effects as the intended behavior.
+
+### Corrections implemented
+
+- Both public and personal selectors now start at the oldest eligible photo and advance only to a greater ID. They return no next photo after the final eligible image; neither selector wraps. Previous navigation also stops at the first image.
+- While a slide is displayed, the PHP page checks for a later validated photo. If one exists, timed navigation advances to it. If none exists, the last image remains on screen for the configured interval and the browser then opens a completion state over that revalidated final image. Manually choosing Next on the final photo opens the same completion state.
+- The public completion panel offers **Go to Home** and **Play again**. The owner-only completion panel offers **Go to Dashboard**, **Go to Home** and **Play again**. The owner endpoint still independently verifies ownership; the public endpoint still checks consent, approval, active status and withdrawal state.
+- Removed the progress timeline and video-like zoom, pan, blur and reveal motion. Settings now offer only **Classic fade** (opacity only) and **Instant cut**. The 5/8/10/15/20 second timing choices remain.
+- No JavaScript, new SQL migration, third-party dependency, fullscreen request or new photo endpoint was introduced.
+
+### Tests performed
+
+- `tests/check_step14_slideshow_completion.php`: 13/13 passed.
+- `tests/check_slideshow_rendering.php`: 31/31 passed.
+- `tests/check_responsive_ui.php`: 11/11 passed.
+- `tests/check_returning_personal_slideshow.php`: 32/32 passed.
+- `tests/check_step13_slide_flow.php`: 22/22 passed.
+- `tests/check_visibility_workflow.php`: 17/17 passed.
+- `tests/check_slideshow_dimensions.php`: 7/7 passed.
+- `tests/check_admin_ui.php`: 15/15 passed.
+- `tests/check_project_entry_ui.php`: 9/9 passed.
+- `tests/check_step9_security.php`: 11/11 passed.
+- All PHP files were syntax-linted; the two local CSS files were parsed.
+
+### Not verified in this environment
+
+The runtime has no project database credentials or live MySQL/MariaDB instance. Database-dependent tests and actual upload/visitor/photo serving were not run. The browser's meta-refresh interval, rendered fade, end overlay, real photographs, and TV/XAMPP behavior were not exercised in Chrome or Edge. Those checks remain required on the user's Windows/XAMPP installation. The implementation stays JavaScript-free, so each timed slide change remains an HTTP page request rather than an in-page two-image crossfade.
+
+---
+
+## Prompt 11 — Remove the extra Play prompt after returning-visitor identification
+
+### User feedback
+
+The user reported that after entering a returning visitor's code, the application still asked them to press a separate button to play their old photographs. The required behavior is immediate playback once the code has been verified.
+
+### Root cause found in Step 14
+
+- The successful POST branch already redirected to `my_slideshow.php?welcome=1`.
+- However, `identify.php` still contained a separate `identify_render_welcome()` interstitial for requests where an authenticated visitor already had a valid session.
+- That interstitial displayed a **Play my previous photos** action. It contradicted the automatic-play requirement and could be shown when an authenticated visitor revisited the identification route (including through browser navigation or an old bookmark).
+- The previous regression test actually expected this extra button, so it incorrectly treated the unwanted interstitial as correct behavior.
+
+### Corrections implemented
+
+- Removed the authenticated welcome/interstitial renderer from `identify.php`.
+- Successful code verification continues to redirect directly to `my_slideshow.php?welcome=1` using the existing 303 Post-Redirect-Get flow.
+- Any already-authenticated visitor who opens `identify.php` is also redirected directly to the personal slideshow. There is no intermediate Play button.
+- The personal slideshow still begins with the visitor's oldest active owned photo, uses the owner-protected `photo.php` endpoint, and automatically advances using the configured five-second default.
+- The visible Stop · Dashboard control remains available during playback. When there are no active photos, the existing empty state offers Upload photographs, My dashboard and Home.
+- Updated the former regression assertion so it rejects the extra Play prompt, and added `tests/check_step15_auto_replay.php` with focused tests for direct auto-play.
+- No database schema change or migration is required.
+
+### Tests actually run
+
+- `tests/check_step15_auto_replay.php`: 7/7 passed.
+- `tests/check_returning_personal_slideshow.php`: 33/33 passed.
+- PHP syntax lint on all project PHP files: see Step 15 report.
+- The returning-visitor behavior is verified at source/regression-test level only in this environment. Live session cookies, visitor-code lookup, MySQL photo selection and real browser redirect/playback must still be exercised on XAMPP.
+
+### Remaining verification
+
+On XAMPP, enter a valid returning visitor code. The browser should immediately open `my_slideshow.php` and begin displaying the first active photo without showing any additional Play confirmation. Reopen `identify.php` while still authenticated; it should redirect to the same personal slideshow. A visitor with no active photos should see the upload/dashboard/home empty state instead.

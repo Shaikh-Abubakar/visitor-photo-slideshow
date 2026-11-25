@@ -63,6 +63,9 @@ try {
 
     $found = visitor_find_by_code($pdo, $code);
     check('exact code finds the registered visitor id and name', $found === ['id' => $registered['id'], 'name' => 'Check Visitor']);
+    check('name lookup warns that an existing name is registered', visitor_name_exists($pdo, 'Check Visitor'));
+    check('name lookup uses the configured case-insensitive collation', visitor_name_exists($pdo, 'check visitor'));
+    check('name lookup does not find an unrelated name', !visitor_name_exists($pdo, 'Someone Else'));
     check('lower-case code finds the same visitor', visitor_find_by_code($pdo, strtolower($code)) === $found);
     check('code without hyphens finds the same visitor', visitor_find_by_code($pdo, str_replace('-', '', $code)) === $found);
     check('code with surrounding spaces finds the same visitor', visitor_find_by_code($pdo, '  ' . $code . ' ') === $found);

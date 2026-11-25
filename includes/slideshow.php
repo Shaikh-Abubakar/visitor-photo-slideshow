@@ -16,63 +16,40 @@ if (!defined('APP_ROOT')) {
 const SLIDESHOW_PUBLIC_CONSENT_VERSION = '1.0';
 
 /**
- * Find the next eligible photograph after an id, wrapping to the first eligible photo.
- * At most one row is fetched per query; no collection of photo metadata is loaded into memory.
- * Invalid/missing files are skipped. A bounded number of attempts prevents an endless loop.
+ * Find the next eligible public photograph in ascending id order.
+ * The first call (afterId=0) starts at the oldest image. Later calls never wrap:
+ * returning null means the presentation has reached its final slide.
+ * Invalid/missing files are skipped while remaining within the eligible set.
  *
  * @return null|array{id:int}
  */
 function slideshow_find_next_photo(PDO $pdo, int $afterId): ?array
 {
-    $registeredEligibleSql =
-        ' FROM photos p '
+    $base = ' FROM photos p '
         . 'INNER JOIN visitors v ON v.id = p.visitor_id '
         . 'INNER JOIN consents c ON c.id = p.consent_id AND c.visitor_id = p.visitor_id '
-        . ' WHERE p.status = :status AND p.approval_status = :approval AND c.consent_version = :version AND c.withdrawn_at IS NULL';
-
-    $countStatement = $pdo->prepare('SELECT COUNT(*)' . $registeredEligibleSql);
-    $countStatement->execute([
+        . " WHERE p.visibility = 'public' AND p.status = :status AND p.approval_status = :approval AND c.consent_version = :version AND c.withdrawn_at IS NULL";
+    $first = $pdo->prepare('SELECT p.id, p.stored_filename, p.mime_type' . $base . ' ORDER BY p.id ASC LIMIT 1');
+    $next = $pdo->prepare('SELECT p.id, p.stored_filename, p.mime_type' . $base . ' AND p.id > :after_id ORDER BY p.id ASC LIMIT 1');
+    $params = [
         ':status' => GALLERY_VISIBLE_STATUS,
         ':approval' => 'approved',
         ':version' => SLIDESHOW_PUBLIC_CONSENT_VERSION,
-    ]);
-    $remaining = (int) $countStatement->fetchColumn();
-    if ($remaining < 1) {
-        return null;
-    }
-
-    $nextStatement = $pdo->prepare(
-        'SELECT p.id, p.stored_filename, p.mime_type' . $registeredEligibleSql
-        . ' AND p.id > :after_id ORDER BY p.id ASC LIMIT 1'
-    );
-    $firstStatement = $pdo->prepare(
-        'SELECT p.id, p.stored_filename, p.mime_type' . $registeredEligibleSql
-        . ' ORDER BY p.id ASC LIMIT 1'
-    );
+    ];
+    $count = $pdo->prepare('SELECT COUNT(*)' . $base);
+    $count->execute($params);
+    $remaining = (int) $count->fetchColumn();
+    if ($remaining < 1) return null;
 
     for ($attempt = 0; $attempt < $remaining; $attempt++) {
         if ($afterId > 0) {
-            $nextStatement->execute([
-                ':status' => GALLERY_VISIBLE_STATUS,
-                ':approval' => 'approved',
-                ':version' => SLIDESHOW_PUBLIC_CONSENT_VERSION,
-                ':after_id' => $afterId,
-            ]);
-            $row = $nextStatement->fetch();
+            $next->execute($params + [':after_id' => $afterId]);
+            $row = $next->fetch();
         } else {
-            $row = false;
+            $first->execute($params);
+            $row = $first->fetch();
         }
-        if (!is_array($row)) {
-            $firstStatement->execute([
-                ':status' => GALLERY_VISIBLE_STATUS,
-                ':approval' => 'approved',
-                ':version' => SLIDESHOW_PUBLIC_CONSENT_VERSION,
-            ]);
-            $row = $firstStatement->fetch();
-        }
-        if (!is_array($row)) {
-            return null;
-        }
+        if (!is_array($row)) return null;
 
         $photoId = (int) $row['id'];
         $path = gallery_resolve_file((string) app_config('UPLOAD_STORAGE_PATH'), (string) $row['stored_filename']);
@@ -83,13 +60,9 @@ function slideshow_find_next_photo(PDO $pdo, int $afterId): ?array
                 if (is_array($imageInfo) && (int) ($imageInfo[0] ?? 0) > 0 && (int) ($imageInfo[1] ?? 0) > 0) {
                     return ['id' => $photoId];
                 }
-                error_log('Slideshow photo ' . $photoId . ': image dimensions could not be read.');
-            } else {
-                error_log('Slideshow photo ' . $photoId . ': stored image type did not match its database record.');
             }
-        } else {
-            error_log('Slideshow photo ' . $photoId . ': image file is missing or is not safely inside private storage.');
         }
+        error_log('Slideshow photo ' . $photoId . ' was skipped because its image file failed validation.');
         $afterId = $photoId;
     }
 
@@ -103,7 +76,7 @@ function slideshow_find_photo_for_serving(PDO $pdo, int $photoId): ?array
         'SELECT p.id, p.stored_filename, p.mime_type FROM photos p '
         . 'INNER JOIN visitors v ON v.id = p.visitor_id '
         . 'INNER JOIN consents c ON c.id = p.consent_id AND c.visitor_id = p.visitor_id '
-        . 'WHERE p.id = :id AND p.status = :status AND p.approval_status = :approval AND c.consent_version = :version AND c.withdrawn_at IS NULL LIMIT 1'
+        . "WHERE p.id = :id AND p.visibility = 'public' AND p.status = :status AND p.approval_status = :approval AND c.consent_version = :version AND c.withdrawn_at IS NULL LIMIT 1"
     );
     $statement->execute([
         ':id' => $photoId,
@@ -134,4 +107,32 @@ function slideshow_find_photo_for_serving(PDO $pdo, int $photoId): ?array
     }
 
     return ['id' => (int) $row['id'], 'path' => $path, 'mime' => $mime, 'size' => $size];
+}
+
+
+/** Find the previous eligible public photo without wrapping past the first slide. */
+function slideshow_find_previous_photo(PDO $pdo, int $beforeId): ?array
+{
+    if ($beforeId < 1) return null;
+    $base = ' FROM photos p INNER JOIN visitors v ON v.id = p.visitor_id '
+        . 'INNER JOIN consents c ON c.id = p.consent_id AND c.visitor_id = p.visitor_id '
+        . " WHERE p.visibility = 'public' AND p.status = :status AND p.approval_status = :approval AND c.consent_version = :version AND c.withdrawn_at IS NULL";
+    $previous = $pdo->prepare('SELECT p.id, p.stored_filename, p.mime_type' . $base . ' AND p.id < :before_id ORDER BY p.id DESC');
+    $previous->execute([
+        ':status' => GALLERY_VISIBLE_STATUS,
+        ':approval' => 'approved',
+        ':version' => SLIDESHOW_PUBLIC_CONSENT_VERSION,
+        ':before_id' => $beforeId,
+    ]);
+    while ($row = $previous->fetch()) {
+        $path = gallery_resolve_file((string) app_config('UPLOAD_STORAGE_PATH'), (string) $row['stored_filename']);
+        if ($path === null) continue;
+        $mime = gallery_detect_mime($path);
+        if ($mime === null || !hash_equals((string) $row['mime_type'], $mime)) continue;
+        $dimensions = @getimagesize($path);
+        if (is_array($dimensions) && (int) ($dimensions[0] ?? 0) > 0 && (int) ($dimensions[1] ?? 0) > 0) {
+            return ['id' => (int) $row['id']];
+        }
+    }
+    return null;
 }

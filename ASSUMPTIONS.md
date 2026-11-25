@@ -163,11 +163,11 @@ The limits and formats come from A3-A5 (10 photographs per submission, 5 MB each
 
 ## I. Decisions made in Step 6 (visitor photo gallery)
 
-**The schema limitation, stated plainly.** The database has no field that separates "this visitor may see their own photograph in their gallery" from "this photograph is approved for the public slideshow". `photos.status` has exactly two values: `active` ("eligible for the slideshow") and `hidden` ("kept but removed from the slideshow"). There is no `deleted` or `rejected` value, and no approval column. No field was invented. The safest reading was chosen instead (I1, I2): the gallery shows only what the slideshow itself would be allowed to show.
+**Historical Step 6 note — superseded by Steps 8 and 11.** The original implementation had no visibility field or approval status, so the gallery initially followed the stricter slideshow rules. Step 8 introduced administrator approval and Step 11 added `photos.visibility` so Private owner-only photos and Public submissions can be handled separately. The current rules below take precedence.
 
 | # | Decision | Reason | Easy to change? |
 |---|----------|--------|-----------------|
-| I1 | **A photograph is visible in the gallery and through `photo.php` only when all three are true:** it belongs to the identified visitor; `status = 'active'`; and a `consents` row exists with `id = photos.consent_id` and the same `visitor_id`. One shared rule (`includes/gallery.php`) is used by both the list and the image endpoint. | The brief: show only photographs with valid consent, respect the status values, never show another visitor's photograph. The composite foreign key already forces the third rule; the `INNER JOIN` checks it again so a damaged record is never shown. | Yes (one constant and the SQL in `includes/gallery.php`) |
+| I1 | **Current owner gallery visibility:** the photo belongs to the identified visitor, has `status = 'active'`, and is either Private (no public consent required) or Public with a matching consent row for that visitor. The same rule is applied by `includes/gallery.php` and `photo.php`. | Private images remain available to the owner without being public. Public photos still need an owner-matching consent record. | Yes |
 | I2 | **A visitor does not see their own `hidden` photographs.** `hidden` can mean "removed from the slideshow" for any reason, and the schema does not say who hid it or why. Nothing in Steps 1-5 can set it; it can only be set directly in the database (or by a later administrator step). | Showing hidden photographs could expose something an administrator removed. Not showing them is the safe direction. If the project later wants "visitors see their own hidden photographs", a separate field or status is needed. | Needs a schema decision |
 | I3 | **For the owner gallery, valid consent means a consent record exists for that visitor and the photograph points at it.** The gallery does not compare `consent_version` with the current text version, so an older photo remains in its owner gallery if wording later changes. Step 7 separately requires public consent version `1.0` for public display; changing that filter requires deliberate review. | Preserve the original gallery behavior while requiring the known public-display consent wording for the shared TV. | Yes (separate query rules) |
 | I4 | **Consent records are never changed by the gallery.** The gallery and `photo.php` only read. | The brief. | n/a |
@@ -186,12 +186,12 @@ The limits and formats come from A3-A5 (10 photographs per submission, 5 MB each
 
 | # | Decision | Reason | Easy to change? |
 |---|----------|--------|-----------------|
-| J1 | Public slideshow eligibility requires `photos.status = 'active'`, a same-visitor consent join, and `consents.consent_version = '1.0'`. | Existing upload consent version 1.0 explicitly permits public slideshow display. | Yes, after a deliberate consent-version policy decision. |
-| J2 | No separate approval column/status is added. | Current schema has only `active` and `hidden`; the upload process already records explicit public-display consent. | Requires a schema and workflow decision if administrator approval is later required. |
+| J1 | Public slideshow eligibility requires `photos.visibility = 'public'`, `photos.status = 'active'`, `photos.approval_status = 'approved'`, a same-visitor consent join, consent version `1.0`, and `withdrawn_at IS NULL`. | Public choice, visitor consent, active status and administrator approval are independent gates. | Yes, after a deliberate consent-version policy decision. |
+| J2 | **Superseded by Step 8:** `photos.approval_status` has `pending`, `approved` and `rejected`. | Consent and administrator approval are independent gates. | Yes, through the Step 8 schema. |
 | J3 | `hidden` and every status other than exact `active` are excluded. Deleted database rows are absent. | Fail closed with the existing status model. | Yes. |
-| J4 | `slideshow.php` and `slideshow_photo.php` are public and do not require authentication from the person viewing the TV; each displayed photo must still belong to an existing registered visitor and have that visitor's matching public-display consent. The existing `photo.php` remains owner-only. | A shared TV viewer should not log in, but photo contributors must register/identify and consent before uploading. | Separate endpoints and explicit joins preserve the security boundary. |
-| J5 | One ID is selected per query with keyset progression; the list is re-queried on every page refresh. The sequence wraps to the first eligible ID. | Avoid loading all photo records and discover newly eligible rows at each reload. | Yes. |
-| J6 | `SLIDESHOW_DEFAULT_DURATION_SECONDS` defaults to 5 seconds and is valid from 2 to 3600 seconds. The empty screen retries after 30 seconds. | Avoid zero/one-second refresh loops and allow practical display intervals. | Yes (`.env`). |
+| J4 | `slideshow.php` and `slideshow_photo.php` are public and do not require authentication from the person viewing the TV; each displayed photo must be marked Public, belong to an existing registered visitor, have that visitor's matching public-display consent, be active and approved, and have no consent withdrawal. The existing `photo.php` remains owner-only. | A shared TV viewer should not log in, but photo contributors must register/identify and consent before uploading. | Separate endpoints and explicit joins preserve the security boundary. |
+| J5 | One ID is selected per query with keyset progression; the list is re-queried on every page refresh. The sequence is finite and stops after the last eligible ID; the UI shows a completion panel rather than wrapping. | Avoid loading all photo records and discover newly eligible rows at each reload. | Yes. |
+| J6 | The public page defaults to 5 seconds and offers 5, 8, 10, 15 and 20 second choices. The empty screen retries after 30 seconds. | Avoid zero/one-second refresh loops and allow practical display intervals. | Yes (`.env`). |
 | J7 | Missing/unreadable files and MIME mismatches are skipped by selection and rejected again by the serving endpoint. | The database alone cannot guarantee a file still exists or has unchanged bytes. | Yes. |
 | J8 | Browser HTML meta refresh is used; there is no JavaScript, push channel or client-side animation. CSS is allowed only for responsive slideshow presentation. | Student later clarified that CSS may be used to improve the TV image layout. | Yes, in `slideshow.css`. |
 | J9 | Step 7 has not been database/browser tested in this environment because PHP `pdo_mysql` and a running MySQL/MariaDB service were unavailable. | Do not claim tests that were not executed. | Run the documented checks on XAMPP/Ubuntu. |
@@ -235,3 +235,22 @@ The limits and formats come from A3-A5 (10 photographs per submission, 5 MB each
 - The review environment had PHP 8.4.24 CLI and Fileinfo, but no `pdo_mysql` driver or live MySQL/MariaDB service. Windows XAMPP and Ubuntu Apache were not available for this review.
 - The CLI `php.ini` reports `upload_max_filesize=2M` and `post_max_size=8M`, which are below the application's documented multi-file upload settings. The Apache/XAMPP PHP configuration may differ and must be checked separately.
 - No real visitor data was intentionally added or changed during Step 10. No database tests were run against the user's database.
+
+
+## Correction: per-photo privacy and duplicate visitor names (2026-11-25)
+
+- A new upload is Private unless the visitor explicitly chooses Public.
+- A Private photo has no public-display consent record (`consent_id` is NULL), is visible only to its identified owner, and is excluded from public/admin review display.
+- A Public photo requires an explicit consent record, remains pending until administrator approval, and is shown to all users through the public slideshow only while consent is valid and the photo remains active and approved.
+- Matching names trigger a warning, not automatic account merging or authentication. Names are not unique. Returning visitors use the original visitor code.
+- The public slideshow's initial duration is 5 seconds. The selectable durations are 5, 8, 10, 15 and 20 seconds.
+- Slideshow image sizing prioritizes full-image visibility (`object-fit: contain`) over filling every pixel by cropping.
+
+
+## Step 11: per-photo visibility and identity handling
+
+- The upload form chooses visibility for one submission batch. Every stored photo row receives that choice. To give two photos different visibility, upload them in separate submissions. Private is the default.
+- Private photos have `consent_id = NULL` and can be retrieved only by the visitor session that owns them. Public photos require a matching, active public-display consent and administrator approval before appearing on the shared slideshow.
+- A same-name match is only a warning. It must not authenticate, merge or reuse a visitor record because names are not unique identifiers. Returning visitors must use their original visitor code.
+- The public slideshow defaults to 5 seconds; supported durations are 5, 8, 10, 15 and 20 seconds.
+- Image elements keep their intrinsic dimensions, are constrained to the available stage and use `object-fit: contain`. This avoids cropping, stretching and unnecessary enlargement of low-resolution sources.

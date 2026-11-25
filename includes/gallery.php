@@ -19,10 +19,10 @@ declare(strict_types=1);
  * The visibility rule (see ASSUMPTIONS.md, section I)
  *   A photograph is visible to its owner when ALL of these are true:
  *     1. photos.visitor_id is the identified visitor;
- *     2. photos.status is 'active' (the schema knows only 'active' and 'hidden');
- *     3. a consents row exists with id = photos.consent_id AND visitor_id = photos.visitor_id.
- *   The database already forces point 3 with a foreign key, but the INNER JOIN checks it again, so a
- *   photograph whose consent record has gone missing is never shown.
+ *     2. photos.status is 'active';
+ *     3. Private photos belong to the owner and need no public consent; Public photos must retain a
+ *        matching consent row for the same visitor. A withdrawn public consent does not remove the
+ *        owner's copy from this private gallery, but it does remove the photo from the public display.
  */
 
 // Direct web requests to this file do nothing: it must be loaded by a page.
@@ -83,8 +83,9 @@ function gallery_count_photos(PDO $pdo, int $visitorId): int
 {
     $statement = $pdo->prepare(
         'SELECT COUNT(*) FROM photos p '
-        . 'INNER JOIN consents c ON c.id = p.consent_id AND c.visitor_id = p.visitor_id '
-        . 'WHERE p.visitor_id = ? AND p.status = ?'
+        . 'LEFT JOIN consents c ON c.id = p.consent_id AND c.visitor_id = p.visitor_id '
+        . 'WHERE p.visitor_id = ? AND p.status = ? '
+        . "AND (p.visibility = 'private' OR (p.visibility = 'public' AND c.id IS NOT NULL))"
     );
     $statement->execute([$visitorId, GALLERY_VISIBLE_STATUS]);
     return (int) $statement->fetchColumn();
@@ -97,7 +98,7 @@ function gallery_count_photos(PDO $pdo, int $visitorId): int
  * photos.visitor_id (InnoDB adds the primary key to it), and a newer upload always has a higher id,
  * so "newest first" needs no extra sort. $page must already be inside 1 .. last page.
  *
- * @return list<array{id: int, original_filename: string, stored_filename: string, status: string, uploaded_at: string}>
+ * @return list<array{id: int, original_filename: string, stored_filename: string, status: string, visibility: string, approval_status: string, consent_version: ?string, withdrawn_at: ?string, uploaded_at: string}>
  */
 function gallery_fetch_page(PDO $pdo, int $visitorId, int $page, int $perPage = GALLERY_PER_PAGE): array
 {
@@ -105,10 +106,11 @@ function gallery_fetch_page(PDO $pdo, int $visitorId, int $page, int $perPage = 
     $offset = ($page - 1) * $perPage;
 
     $statement = $pdo->prepare(
-        'SELECT p.id, p.original_filename, p.stored_filename, p.status, p.uploaded_at '
+        'SELECT p.id, p.original_filename, p.stored_filename, p.status, p.visibility, p.approval_status, p.uploaded_at, c.consent_version, c.withdrawn_at '
         . 'FROM photos p '
-        . 'INNER JOIN consents c ON c.id = p.consent_id AND c.visitor_id = p.visitor_id '
+        . 'LEFT JOIN consents c ON c.id = p.consent_id AND c.visitor_id = p.visitor_id '
         . 'WHERE p.visitor_id = :visitor AND p.status = :status '
+        . "AND (p.visibility = 'private' OR (p.visibility = 'public' AND c.id IS NOT NULL)) "
         . 'ORDER BY p.id DESC '
         . 'LIMIT :limit OFFSET :offset'
     );
@@ -125,6 +127,10 @@ function gallery_fetch_page(PDO $pdo, int $visitorId, int $page, int $perPage = 
             'original_filename' => (string) $row['original_filename'],
             'stored_filename'   => (string) $row['stored_filename'],
             'status'            => (string) $row['status'],
+            'visibility'        => (string) $row['visibility'],
+            'approval_status'   => (string) $row['approval_status'],
+            'consent_version'   => $row['consent_version'] === null ? null : (string) $row['consent_version'],
+            'withdrawn_at'      => $row['withdrawn_at'] === null ? null : (string) $row['withdrawn_at'],
             'uploaded_at'       => (string) $row['uploaded_at'],
         ];
     }
@@ -142,8 +148,9 @@ function gallery_find_visible_photo(PDO $pdo, int $photoId, int $visitorId): ?ar
 {
     $statement = $pdo->prepare(
         'SELECT p.id, p.stored_filename, p.mime_type FROM photos p '
-        . 'INNER JOIN consents c ON c.id = p.consent_id AND c.visitor_id = p.visitor_id '
+        . 'LEFT JOIN consents c ON c.id = p.consent_id AND c.visitor_id = p.visitor_id '
         . 'WHERE p.id = ? AND p.visitor_id = ? AND p.status = ? '
+        . "AND (p.visibility = 'private' OR (p.visibility = 'public' AND c.id IS NOT NULL)) "
         . 'LIMIT 1'
     );
     $statement->execute([$photoId, $visitorId, GALLERY_VISIBLE_STATUS]);
@@ -211,4 +218,81 @@ function gallery_detect_mime(string $realPath): ?string
     }
     $mime = (new finfo(FILEINFO_MIME_TYPE))->file($realPath);
     return is_string($mime) && isset(GALLERY_SERVED_TYPES[$mime]) ? $mime : null;
+}
+
+
+/** Validate one owner's photo for the owner-only slideshow. */
+function gallery_owner_photo_is_renderable(PDO $pdo, int $photoId, int $visitorId): bool
+{
+    $photo = gallery_find_visible_photo($pdo, $photoId, $visitorId);
+    if ($photo === null) {
+        return false;
+    }
+
+    $path = gallery_resolve_file((string) app_config('UPLOAD_STORAGE_PATH'), $photo['stored_filename']);
+    if ($path === null) {
+        return false;
+    }
+
+    $actualMime = gallery_detect_mime($path);
+    if ($actualMime === null || !hash_equals($photo['mime_type'], $actualMime)) {
+        return false;
+    }
+
+    $dimensions = @getimagesize($path);
+    return is_array($dimensions)
+        && (int) ($dimensions[0] ?? 0) > 0
+        && (int) ($dimensions[1] ?? 0) > 0;
+}
+
+/**
+ * Return the next active owner photo in chronological order.
+ * The first call starts at the oldest photo; later calls never wrap after the final slide.
+ * @return null|array{id:int}
+ */
+function gallery_find_next_owner_slideshow_photo(PDO $pdo, int $visitorId, int $afterId): ?array
+{
+    $eligibleSql = ' FROM photos p LEFT JOIN consents c ON c.id = p.consent_id AND c.visitor_id = p.visitor_id '
+        . ' WHERE p.visitor_id = :visitor AND p.status = :status '
+        . "AND (p.visibility = 'private' OR (p.visibility = 'public' AND c.id IS NOT NULL))";
+    $statement = $afterId > 0
+        ? $pdo->prepare('SELECT p.id' . $eligibleSql . ' AND p.id > :after_id ORDER BY p.id ASC')
+        : $pdo->prepare('SELECT p.id' . $eligibleSql . ' ORDER BY p.id ASC');
+    $params = [':visitor' => $visitorId, ':status' => GALLERY_VISIBLE_STATUS];
+    if ($afterId > 0) $params[':after_id'] = $afterId;
+    $statement->execute($params);
+    foreach ($statement->fetchAll(PDO::FETCH_COLUMN) as $id) {
+        $id = (int) $id;
+        if (gallery_owner_photo_is_renderable($pdo, $id, $visitorId)) return ['id' => $id];
+    }
+    return null;
+}
+
+/** Previous photo in chronological order; does not wrap beyond the first slide. @return null|array{id:int} */
+function gallery_find_previous_owner_slideshow_photo(PDO $pdo, int $visitorId, int $beforeId): ?array
+{
+    if ($beforeId < 1) return null;
+    $eligibleSql = ' FROM photos p LEFT JOIN consents c ON c.id = p.consent_id AND c.visitor_id = p.visitor_id '
+        . ' WHERE p.visitor_id = :visitor AND p.status = :status '
+        . "AND (p.visibility = 'private' OR (p.visibility = 'public' AND c.id IS NOT NULL))";
+    $previous = $pdo->prepare('SELECT p.id' . $eligibleSql . ' AND p.id < :before_id ORDER BY p.id DESC');
+    $previous->execute([':visitor' => $visitorId, ':status' => GALLERY_VISIBLE_STATUS, ':before_id' => $beforeId]);
+    foreach ($previous->fetchAll(PDO::FETCH_COLUMN) as $id) {
+        $id = (int) $id;
+        if (gallery_owner_photo_is_renderable($pdo, $id, $visitorId)) return ['id' => $id];
+    }
+    return null;
+}
+
+/** Position and total for the active owner-only slide counter. */
+function gallery_owner_slideshow_position(PDO $pdo, int $visitorId, int $photoId): array
+{
+    $base = ' FROM photos p LEFT JOIN consents c ON c.id = p.consent_id AND c.visitor_id = p.visitor_id '
+        . ' WHERE p.visitor_id = :visitor AND p.status = :status '
+        . "AND (p.visibility = 'private' OR (p.visibility = 'public' AND c.id IS NOT NULL))";
+    $total = $pdo->prepare('SELECT COUNT(*)' . $base);
+    $total->execute([':visitor'=>$visitorId, ':status'=>GALLERY_VISIBLE_STATUS]);
+    $rank = $pdo->prepare('SELECT COUNT(*)' . $base . ' AND p.id <= :photo_id');
+    $rank->execute([':visitor'=>$visitorId, ':status'=>GALLERY_VISIBLE_STATUS, ':photo_id'=>$photoId]);
+    return ['position'=>max(1,(int)$rank->fetchColumn()), 'total'=>max(1,(int)$total->fetchColumn())];
 }
